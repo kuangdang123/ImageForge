@@ -1,0 +1,10 @@
+# Windows 启动器必须是 CRLF：LF 换行的 bat 会让 cmd 把 goto/label 解析错，
+# 一次双击启动多个实例（v1.0 前踩过这个坑）。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 图片按二进制处理，避免被当成文本
+*.png binary
+*.jpg binary
+*.ico binary
+*.exe binary
