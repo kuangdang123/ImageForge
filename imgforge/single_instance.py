@@ -27,6 +27,9 @@ def acquire(name: str = MUTEX_NAME) -> bool:
         return True
     kernel32.CreateMutexW.restype = wintypes.HANDLE
     kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    # 先清掉线程里残留的错误码：CreateMutexW 用 GetLastError 区分"新建"和"已存在"，
+    # 若前序 Win32 调用恰好留下 183，全新启动的进程会被误判成第二个实例而直接退出。
+    kernel32.SetLastError(0)
     handle = kernel32.CreateMutexW(None, True, name)
     if not handle:
         # 创建失败时宁可允许打开，也不要让程序打不开
@@ -35,9 +38,26 @@ def acquire(name: str = MUTEX_NAME) -> bool:
     return kernel32.GetLastError() != ERROR_ALREADY_EXISTS
 
 
+def release() -> None:
+    """释放互斥体（正常退出时进程结束会自动释放，测试里手动调用）。"""
+    global _handle
+    if _handle:
+        try:
+            ctypes.windll.kernel32.CloseHandle(_handle)
+        except AttributeError:  # 非 Windows
+            pass
+        _handle = None
+
+
 def _window_titles(keyword: str) -> List[int]:
+    """收集标题里含关键字的可见顶层窗口，应用窗口排在前面。
+
+    资源管理器打开同名文件夹时标题里也会有关键字（"ImageForge"），
+    所以不能"找到第一个就收工"，要挑更像应用窗口的那个。
+    """
     user32 = ctypes.windll.user32
     found: List[int] = []
+    titles: dict[int, str] = {}
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def _callback(hwnd, _lparam):  # pragma: no cover - 由系统回调
@@ -50,11 +70,23 @@ def _window_titles(keyword: str) -> List[int]:
         user32.GetWindowTextW(hwnd, buffer, length + 1)
         if keyword in buffer.value:
             found.append(hwnd)
-            return False
+            titles[hwnd] = buffer.value
         return True
 
     user32.EnumWindows(_callback, 0)
-    return found
+
+    def score(hwnd: int) -> int:
+        title = titles.get(hwnd, "")
+        points = 0
+        if "·" in title:
+            points += 4
+        if "图片格式转换" in title or "选择图片" in title:
+            points += 6
+        if title.startswith("ImageForge") or title.endswith("ImageForge"):
+            points += 1
+        return points
+
+    return sorted(found, key=score, reverse=True)
 
 
 def focus_existing(keyword: str = "ImageForge", timeout: float = 3.0) -> bool:

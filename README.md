@@ -202,7 +202,7 @@ ImageForge/
 │  ├─ cli.py                命令行
 │  └─ assets/               应用图标与 logo
 ├─ samples/                 示例图片
-├─ tests/                   32 个单元测试（格式转换 + 挑图逻辑）
+├─ tests/                   35 个单元测试（格式转换 + 挑图 + 单实例）
 ├─ tools/
 │  ├─ make_icon.py          从 assets/logo.png 重新生成 assets/app.ico
 │  ├─ check_contrast.py     色板对比度校验
@@ -218,7 +218,7 @@ ImageForge/
 ## 开发
 
 ```powershell
-python -m unittest discover -s tests          # 32 个测试
+python -m unittest discover -s tests          # 35 个测试
 python tools/make_icon.py                     # 从 assets/logo.png 生成多尺寸 app.ico
 python tools/check_contrast.py                # 明暗两套色板 WCAG 校验
 python tools/gui_smoke.py                     # 驱动真实窗口跑一遍并截图
