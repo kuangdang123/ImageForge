@@ -1,23 +1,24 @@
-# ImageForge
+# ImageForge 2.0
 
 把 PNG / JPG / WebP / BMP / GIF / TIFF / AVIF 互转，并且一键生成**多尺寸 Windows 图标**的桌面小工具。
 
-纯 Python（tkinter + Pillow），不依赖浏览器、不上传文件、不需要联网。
+界面用 PySide6（Qt 6）重写：原生控件、明暗两套主题、1.5× 高 DPI 下依然锐利。
+转换全部在本机完成，不依赖浏览器、不上传文件、不需要联网。
 
-**[下载 v1.0.0](https://github.com/kuangdang123/ImageForge/releases/latest)** —— 单个 `ImageForge.exe`，不需要装 Python。
+**[下载发布版](https://github.com/kuangdang123/ImageForge/releases/latest)** —— 单个 `ImageForge.exe`，不需要装 Python。
 
-![浅色主题](docs/screenshots/light.png)
+![浅色主题](docs/screenshots/qt-light.png)
 
 <details>
-<summary>深色主题 & 预览窗口（点击展开）</summary>
+<summary>深色主题、挑图窗口、预览窗口、转换完成（点击展开）</summary>
 
-![深色主题](docs/screenshots/dark.png)
+![深色主题](docs/screenshots/qt-dark.png)
 
-![深色主题下的挑图窗口](docs/screenshots/picker-dark.png)
+![从文件夹挑图](docs/screenshots/qt-picker.png)
 
-![勾选后的状态](docs/screenshots/picker-selected.png)
+![预览与 ICO 尺寸条](docs/screenshots/qt-preview.png)
 
-![预览窗口](docs/screenshots/preview.png)
+![转换完成](docs/screenshots/qt-convert.png)
 
 </details>
 
@@ -30,13 +31,13 @@
 - **可控输出**：有损质量滑杆、WebP 无损、保留 EXIF / ICC、文件名后缀、输出到源文件旁边或指定文件夹。
 - **不覆盖原图**：输出与源文件同名时自动改名，重名自动加 ` (2)`。
 - **预览**：大图查看 + 透明棋盘格 + 元信息；输出 ICO 时还能看到每一档尺寸真实渲染出来的样子。
-- **明暗主题**、窗口大小、上次使用的目录都会记住。
+- **明暗主题**、窗口大小、上次使用的目录都会记住；重复启动只会开一个窗口。
 
 ## 快速开始
 
 ### 方式一：下载现成的 exe（不需要 Python）
 
-从 [Releases](https://github.com/kuangdang123/ImageForge/releases/latest) 下载 `ImageForge.exe`（约 23 MB），放到任意文件夹双击即可。单文件、免安装，第一次启动会先解压到临时目录，慢一两秒。
+从 [Releases](https://github.com/kuangdang123/ImageForge/releases/latest) 下载 `ImageForge.exe`（约 52 MB），放到任意文件夹双击即可。单文件、免安装，第一次启动会先解压到临时目录，慢一两秒。
 
 重复双击不会再开第二个窗口，而是把已经开着的窗口提到前面来。
 
@@ -53,14 +54,14 @@ pip install -r requirements.txt
 
 | 方式 | 命令 |
 | --- | --- |
-| 双击启动器 | `启动 ImageForge.bat` |
-| 无控制台窗口 | `pythonw app.pyw` |
-| 控制台 | `python app.pyw` |
-| 模块入口 | `python -m imgforge` |
+| 双击启动器 | `启动 ImageForge 2.0.bat` |
+| 无控制台窗口 | `pythonw app2.pyw` |
+| 控制台 | `python app2.pyw` |
+| 模块入口 | `python -m imgforge.qt` |
 
 启动器会优先找同目录下的 `ImageForge.exe`，没有才退回 `pythonw` / `pyw` / `python`。
 
-`tkinterdnd2` 只用于**拖拽**，没装也能正常用「添加图片 / 选择文件夹 / 粘贴」。
+> 1.x 的 tkinter 版本仍然保留在标签 `v1.0.0` 与 `app.pyw` / `启动 ImageForge.bat` 里，可以继续用；2.0 是独立的 `app2.pyw` 与 `imgforge/qt/`。
 
 ## 使用
 
@@ -75,7 +76,7 @@ pip install -r requirements.txt
 
 点「选择文件夹…」（或 `Ctrl+Shift+O`）会打开图片列表，而不是把所有图一股脑塞进队列：
 
-![文件夹浏览与多选](docs/screenshots/picker.png)
+![文件夹浏览与多选](docs/screenshots/qt-picker.png)
 
 - 顶部显示当前文件夹，可以「更改文件夹…」或「刷新」；
 - 搜索框按文件名过滤，多个词用空格分隔；
@@ -100,7 +101,7 @@ pip install -r requirements.txt
 
 ## 命令行
 
-不想开窗口时可以直接用：
+不想开窗口时可以直接用（命令行不依赖 Qt，装在无图形界面的机器上也能跑）：
 
 ```powershell
 python -m imgforge formats
@@ -186,32 +187,42 @@ Windows 图标不是「一张 256×256 的 PNG」那么简单：任务栏、标�
 
 ```text
 ImageForge/
-├─ app.pyw                  桌面入口（pythonw 双击无控制台）
-├─ 启动 ImageForge.bat      双击启动器
+├─ app2.pyw                  2.0 桌面入口（PySide6）
+├─ 启动 ImageForge 2.0.bat   2.0 启动器
+├─ app.pyw / 启动 ImageForge.bat   1.x（tkinter）入口
 ├─ requirements.txt
 ├─ imgforge/
-│  ├─ __main__.py           无参数开 GUI，有参数走 CLI
-│  ├─ gui.py                主窗口、预览窗口、拖拽、线程
-│  ├─ picker.py             文件夹浏览窗口（搜索 / 多选 / 缩略图）
-│  ├─ widgets.py            胶囊、勾选行、队列行、空态等自绘控件
-│  ├─ theme.py              语义色板、字体、ttk 样式、DPI 感知
-│  ├─ ico.py                ICO 渲染与容器编码
-│  ├─ converter.py          格式表、单文件转换、批量任务
-│  ├─ settings.py           设置读写
-│  ├─ single_instance.py    互斥体 + 激活已开窗口
-│  ├─ cli.py                命令行
-│  └─ assets/               应用图标与 logo
-├─ samples/                 示例图片
-├─ tests/                   35 个单元测试（格式转换 + 挑图 + 单实例）
+│  ├─ qt/                    2.0 界面（PySide6）
+│  │  ├─ app.py              QApplication、主题、单实例
+│  │  ├─ mainwindow.py       主窗口：命令栏 / 队列 / 设置 / 底栏
+│  │  ├─ queueview.py        文件队列模型、委托、拖放
+│  │  ├─ settings_panel.py   输出设置面板
+│  │  ├─ preview.py          预览窗口与 ICO 尺寸条
+│  │  ├─ picker.py           从文件夹挑图
+│  │  ├─ tokens.py           颜色 / 间距 / 字号 token
+│  │  ├─ theme.py            主题、QSS、明暗切换
+│  │  ├─ widgets.py          卡片、胶囊、分段选择、开关、Toast…
+│  │  └─ icons.py            矢量图标
+│  ├─ converter.py           格式表、单文件转换、批量任务
+│  ├─ ico.py                 ICO 渲染与容器编码
+│  ├─ settings.py            设置读写
+│  ├─ single_instance.py     互斥体 + 激活已开窗口
+│  ├─ cli.py                 命令行
+│  ├─ __main__.py            模块入口（无参数开 GUI）
+│  ├─ gui.py / widgets.py / theme.py / picker.py   1.x tkinter 界面
+│  └─ assets/                应用图标与 logo
+├─ samples/                  示例图片
+├─ tests/                    35 个单元测试（格式转换 + 挑图 + 单实例）
 ├─ tools/
-│  ├─ make_icon.py          从 assets/logo.png 重新生成 assets/app.ico
-│  ├─ check_contrast.py     色板对比度校验
-│  ├─ build_exe.py          PyInstaller 单文件打包（含版本信息）
-│  ├─ entry_gui.py          exe 的入口脚本
-│  ├─ shot.py               界面截图
-│  ├─ shot_window.py        按标题截取任意窗口（含打包后的 exe）
-│  ├─ gui_smoke.py          GUI 冒烟：加入 → 转换 → 预览
-│  └─ picker_smoke.py       挑图窗口冒烟：扫描 → 多选 → 转换
+│  ├─ make_icon.py           从 assets/logo.png 重新生成 assets/app.ico
+│  ├─ check_contrast.py      色板对比度校验
+│  ├─ build_exe.py           PyInstaller 打包（默认 Qt 版，--legacy-tk 打 1.x）
+│  ├─ entry_qt.py / entry_gui.py        exe 入口脚本
+│  ├─ qt_smoke.py            离屏冒烟：添加 → 转换 → 预览 → 挑图
+│  ├─ qt_shot.py             真实平台界面截图
+│  ├─ shot_window.py         按标题截取任意窗口（含打包后的 exe）
+│  ├─ gui_smoke.py / picker_smoke.py   1.x 界面冒烟
+│  └─ …
 └─ docs/screenshots/
 ```
 
@@ -221,9 +232,9 @@ ImageForge/
 python -m unittest discover -s tests          # 35 个测试
 python tools/make_icon.py                     # 从 assets/logo.png 生成多尺寸 app.ico
 python tools/check_contrast.py                # 明暗两套色板 WCAG 校验
-python tools/gui_smoke.py                     # 驱动真实窗口跑一遍并截图
-python tools/picker_smoke.py light            # 挑图窗口：扫描、多选、自动转换、截图
-python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 23 MB）
+python tools/qt_smoke.py                      # 离屏跑完整流程
+python tools/qt_shot.py light tmp\a.png       # 真实窗口截图（dark / --picker / --preview / --convert）
+python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 52 MB）
 ```
 
 开发脚本把配置写到 `tmp/settings/`（通过 `IMAGEFORGE_HOME` 环境变量重定向），不会动 `%APPDATA%` 里的真实配置。
@@ -234,7 +245,7 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 
 **输出的文件名多了 ` (2)`？** 避免覆盖已有文件。源文件和输出同名时也会自动改成 `名字_格式.扩展名`。
 
-**拖拽没反应？** 没装 `tkinterdnd2`。装不上也不影响使用，工具栏的「添加图片」「选择文件夹…」功能一样。
+**拖拽没反应？** 2.0 的拖拽由 Qt 直接处理，不依赖额外组件。如果确实没反应，用工具栏的「添加图片」「选择文件夹…」一样可以。
 
 **双击 exe 时 Windows 提示"已保护你的电脑"？** 程序没有代码签名，首次运行会触发 SmartScreen。点「更多信息」→「仍要运行」即可；也可以右键 exe → 属性 → 常规 → 勾选「解除锁定」。
 
@@ -246,4 +257,4 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 
 **为什么 AVIF 慢？** 编码本身计算量大，批量时耐心等一下；急着用可以先转 WebP。
 
-**字体在高分屏上糊？** 程序启动时就启用了 DPI 感知，并按系统缩放换算像素；如果仍然觉得小，可以在 Windows 显示设置里调整缩放比例。
+**打包后的 exe 是 52 MB？** PySide6 自带的 Qt 运行库体积就在这里；已经排除了 WebEngine、QML、3D 等用不到的大模块。1.x 的 tkinter 版本只有 23 MB。

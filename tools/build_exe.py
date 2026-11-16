@@ -1,9 +1,10 @@
-"""用 PyInstaller 打一个轻量单文件 exe（发布用）。
+"""用 PyInstaller 打单文件 exe（发布用）。
 
-    python tools/build_exe.py            # 输出 dist/ImageForge.exe
-    python tools/build_exe.py --onedir   # 只产出文件夹版本，启动更快
+    python tools/build_exe.py --qt          # 2.0：PySide6 界面（默认）
+    python tools/build_exe.py --legacy-tk   # 1.0：tkinter 界面
+    python tools/build_exe.py --onedir      # 文件夹版本，启动更快
 
-产物不含 Python 环境；tkinterdnd2 的 tkdnd 二进制由 hook 自动收集。
+默认输出 dist/ImageForge.exe（单文件，不含 Python 环境）。
 """
 
 from __future__ import annotations
@@ -15,12 +16,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
 DIST = ROOT / "dist"
-VERSION = "1.0.0"
 
-VERSION_INFO = """VSVersionInfo(
+QT_VERSION = "2.0.0"
+TK_VERSION = "1.0.0"
+
+VERSION_TEMPLATE = """VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(MAJOR, MINOR, PATCH, 0),
+    prodvers=(MAJOR, MINOR, PATCH, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -35,13 +38,13 @@ VERSION_INFO = """VSVersionInfo(
           '080404B0',
           [
             StringStruct('CompanyName', 'ImageForge'),
-            StringStruct('FileDescription', 'ImageForge 图片格式转换'),
-            StringStruct('FileVersion', '1.0.0.0'),
+            StringStruct('FileDescription', 'DESCRIPTION'),
+            StringStruct('FileVersion', 'VERSION'),
             StringStruct('InternalName', 'ImageForge'),
             StringStruct('LegalCopyright', ''),
             StringStruct('OriginalFilename', 'ImageForge.exe'),
             StringStruct('ProductName', 'ImageForge'),
-            StringStruct('ProductVersion', '1.0.0.0'),
+            StringStruct('ProductVersion', 'VERSION'),
             StringStruct('Comments', '图片格式转换与多尺寸 ICO 生成'),
           ],
         )
@@ -52,18 +55,49 @@ VERSION_INFO = """VSVersionInfo(
 )
 """
 
-EXCLUDES = [
+COMMON_EXCLUDES = [
     "numpy", "scipy", "pandas", "matplotlib", "IPython", "pytest",
-    "PyQt5", "PyQt6", "PySide2", "PySide6", "torch", "cv2", "pydantic",
+    "PyQt5", "PyQt6", "PySide2", "torch", "cv2", "pydantic",
 ]
+
+QT_EXCLUDES = [
+    "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineQuick",
+    "PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtQml", "PySide6.QtQuick",
+    "PySide6.QtQuickWidgets", "PySide6.QtQuickControls2", "PySide6.Qt3DCore",
+    "PySide6.Qt3DRender", "PySide6.Qt3DInput", "PySide6.Qt3DLogic", "PySide6.Qt3DAnimation",
+    "PySide6.QtCharts", "PySide6.QtDataVisualization", "PySide6.QtMultimedia",
+    "PySide6.QtMultimediaWidgets", "PySide6.QtNetworkAuth", "PySide6.QtSql",
+    "PySide6.QtTest", "PySide6.QtBluetooth", "PySide6.QtSerialPort", "PySide6.QtSensors",
+    "PySide6.QtPositioning", "PySide6.QtNfc", "PySide6.QtRemoteObjects", "PySide6.QtScxml",
+    "PySide6.QtTextToSpeech", "PySide6.QtHelp", "PySide6.QtDesigner", "PySide6.QtUiTools",
+    "tkinter", "_tkinter", "tkinterdnd2",
+]
+
+
+def version_info(version: str, description: str) -> str:
+    major, minor, patch = (int(part) for part in version.split("."))
+    return (
+        VERSION_TEMPLATE.replace("MAJOR", str(major))
+        .replace("MINOR", str(minor))
+        .replace("PATCH", str(patch))
+        .replace("VERSION", f"{version}.0")
+        .replace("DESCRIPTION", description)
+    )
 
 
 def main() -> int:
     onedir = "--onedir" in sys.argv
+    legacy = "--legacy-tk" in sys.argv
     BUILD.mkdir(parents=True, exist_ok=True)
     DIST.mkdir(parents=True, exist_ok=True)
+
+    if legacy:
+        version, description, entry = TK_VERSION, "ImageForge 图片格式转换", "entry_gui.py"
+    else:
+        version, description, entry = QT_VERSION, "ImageForge 2 图片格式转换", "entry_qt.py"
+
     version_file = BUILD / "version_info.txt"
-    version_file.write_text(VERSION_INFO, encoding="utf-8")
+    version_file.write_text(version_info(version, description), encoding="utf-8")
 
     args = [
         sys.executable, "-m", "PyInstaller",
@@ -73,15 +107,17 @@ def main() -> int:
         "--name", "ImageForge",
         "--icon", str(ROOT / "imgforge" / "assets" / "app.ico"),
         "--add-data", f"{ROOT / 'imgforge' / 'assets'}{';'}imgforge/assets",
-        "--collect-all", "tkinterdnd2",
         "--version-file", str(version_file),
         "--distpath", str(DIST),
         "--workpath", str(BUILD / "work"),
         "--specpath", str(BUILD),
     ]
-    for name in EXCLUDES:
+    excludes = COMMON_EXCLUDES + ([] if legacy else QT_EXCLUDES)
+    if legacy:
+        args.extend(["--collect-all", "tkinterdnd2"])
+    for name in excludes:
         args.extend(["--exclude-module", name])
-    args.append(str(ROOT / "tools" / "entry_gui.py"))
+    args.append(str(ROOT / "tools" / entry))
 
     print("PyInstaller:", " ".join(args[2:]))
     result = subprocess.run(args, cwd=ROOT)
