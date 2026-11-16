@@ -63,7 +63,7 @@ def main() -> int:
     window.nav.set_value("upscale", emit=True)
     panel = window.upscale_panel
     panel._building = True
-    panel.model_group.set_value("cugan-se")
+    panel.model_box.set_value("cugan-se", emit=True)
     panel.device.set_value("cpu")
     panel.mode.set_value("scale")
     panel._rebuild_scale_options(keep=2)

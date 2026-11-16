@@ -117,7 +117,7 @@ def main() -> int:
             window.settings["out_mode"] = "folder"
             window.settings["out_dir"] = str(tout)
             window.upscale_panel.device.set_value("cpu", emit=True)
-            window.upscale_panel.model_group.set_value("cugan-se", emit=True)
+            window.upscale_panel.model_box.set_value("cugan-se", emit=True)
             settle(0.2)
             window.start_upscale()
             deadline = time.monotonic() + 180

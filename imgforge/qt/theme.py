@@ -307,6 +307,50 @@ class Theme(QObject):
             border: 1px solid {c['focus']};
         }}
 
+        /* --------------------------------------------------- 下拉选择 -- */
+        QComboBox#SelectBox {{
+            background: {c['surface_raised']};
+            border: 1px solid {c['border']};
+            border-radius: {radius_md}px;
+            padding: 6px 34px 6px 12px;
+            min-height: 22px;
+            color: {c['text_primary']};
+        }}
+        QComboBox#SelectBox:hover {{
+            border-color: {c['border_strong']};
+            background: {c['surface_hover']};
+        }}
+        QComboBox#SelectBox:focus {{
+            border: 1px solid {c['focus']};
+        }}
+        QComboBox#SelectBox:disabled {{
+            color: {c['text_disabled']};
+            background: {c['surface']};
+        }}
+        QComboBox#SelectBox::drop-down {{
+            border: none;
+            width: 30px;
+        }}
+        QComboBox#SelectBox::down-arrow {{
+            image: none;
+            width: 0;
+            height: 0;
+        }}
+        QComboBox#SelectBox QAbstractItemView {{
+            background: {c['surface_raised']};
+            border: 1px solid {c['border']};
+            border-radius: {radius_md}px;
+            padding: 4px;
+            outline: none;
+            selection-background-color: {c['accent_subtle']};
+            selection-color: {c['text_primary']};
+        }}
+        QComboBox#SelectBox QAbstractItemView::item {{
+            min-height: 26px;
+            padding: 2px 8px;
+            border-radius: {radius_sm}px;
+        }}
+
         /* ------------------------------------------------------- 滚动 -- */
         QScrollArea {{
             background: transparent;

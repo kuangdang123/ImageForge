@@ -26,6 +26,7 @@ from .widgets import (
     ChipGroup,
     SectionHeader,
     SegmentedControl,
+    SelectBox,
     SwitchRow,
 )
 
@@ -91,9 +92,9 @@ class UpscalePanel(QWidget):
         card.body.addWidget(header)
 
         options = [(model.id, model.name) for model in self._models]
-        self.model_group = ChipGroup(self.theme, options, columns=1, compact=True)
-        self.model_group.valueChanged.connect(self._on_model_changed)
-        card.body.addWidget(self.model_group)
+        self.model_box = SelectBox(self.theme, options, height=36)
+        self.model_box.valueChanged.connect(self._on_model_changed)
+        card.body.addWidget(self.model_box)
 
         self.model_note = QLabel("")
         self.model_note.setObjectName("Caption")
@@ -125,6 +126,11 @@ class UpscalePanel(QWidget):
         self.scale_group = ChipGroup(self.theme, [], columns=4, compact=True)
         self.scale_group.valueChanged.connect(self._on_scale_changed)
         card.body.addWidget(self.scale_group)
+
+        self.scale_hint = QLabel("8× 及以上由多轮模型放大组合，耗时成倍增加")
+        self.scale_hint.setObjectName("Caption")
+        self.scale_hint.setWordWrap(True)
+        card.body.addWidget(self.scale_hint)
 
         self.preset_label = QLabel("目标尺寸")
         self.preset_label.setObjectName("Caption")
@@ -188,7 +194,7 @@ class UpscalePanel(QWidget):
         model_id = str(s["upscale_model"] or upscale.DEFAULT_MODEL_ID)
         if model_id not in upscale.MODEL_BY_ID:
             model_id = upscale.DEFAULT_MODEL_ID
-        self.model_group.set_value(model_id)
+        self.model_box.set_value(model_id)
         self.device.set_value(str(s["upscale_device"] or "auto"))
         self.mode.set_value(str(s["upscale_mode"] or "scale"))
         self.preset_group.set_value(str(s["upscale_preset"] or "1080p"))
@@ -199,7 +205,7 @@ class UpscalePanel(QWidget):
 
     @property
     def model(self):
-        return upscale.MODEL_BY_ID[self.model_group.value() or upscale.DEFAULT_MODEL_ID]
+        return upscale.MODEL_BY_ID[self.model_box.value() or upscale.DEFAULT_MODEL_ID]
 
     def _current_scale(self) -> int:
         model = self.model
@@ -207,24 +213,36 @@ class UpscalePanel(QWidget):
             scale = int(self.scale_group.value() or model.default_scale)
         except (TypeError, ValueError):
             scale = model.default_scale
+        return max(1, scale)
+
+    def _denoise_base_scale(self) -> int:
+        """降噪档位按"单轮真实倍率"查表；组合倍率取模型最大单轮倍率。"""
+        model = self.model
+        scale = self._current_scale()
         scales = upscale.available_scales(model)
-        if scale not in scales:
-            scale = scales[0] if scales else model.default_scale
-        return scale
+        if not scales:
+            return max(2, model.default_scale)
+        if scale in scales:
+            return scale
+        smaller = [item for item in scales if item <= scale]
+        return smaller[-1] if smaller else scales[0]
 
     def _rebuild_scale_options(self, keep: int | None = None) -> None:
         model = self.model
-        scales = upscale.available_scales(model)
+        choices = list(upscale.SCALE_CHOICES)
         current = keep or int(self.settings["upscale_scale"] or model.default_scale)
-        options = [(str(scale), f"{scale}×") for scale in scales]
+        if current not in choices:
+            choices.append(current)
+            choices.sort()
+        options = [(str(scale), f"{scale}×") for scale in choices]
         self.scale_group.set_options(options)
-        if current not in scales:
-            current = scales[0] if scales else model.default_scale
+        if current not in choices:
+            current = model.default_scale if model.default_scale in choices else choices[0]
         self.scale_group.set_value(str(current))
 
     def _rebuild_denoise_options(self, keep: int | None = None) -> None:
         model = self.model
-        scale = self._current_scale()
+        scale = self._denoise_base_scale()
         levels = model.denoise_levels_for(scale)
         current = keep if keep is not None else self.settings["upscale_denoise"]
         if current is None:
@@ -243,6 +261,7 @@ class UpscalePanel(QWidget):
 
     def _on_scale_changed(self, _value: str) -> None:
         self._rebuild_denoise_options(keep=None)
+        self._sync_visibility()
         self._emit()
 
     def _on_preset_changed(self, _value: str) -> None:
@@ -262,8 +281,9 @@ class UpscalePanel(QWidget):
     def _sync_visibility(self) -> None:
         mode = self.mode.value()
         scale_mode = mode == "scale"
-        for widget in (self.scale_label, self.scale_group):
+        for widget in (self.scale_label, self.scale_group, self.scale_hint):
             widget.setVisible(scale_mode)
+        self.scale_hint.setVisible(scale_mode and self._current_scale() > 4)
         for widget in (self.preset_label, self.preset_group):
             widget.setVisible(not scale_mode)
         self.custom_row.setVisible(not scale_mode and self.preset_group.value() == CUSTOM)
@@ -299,11 +319,11 @@ class UpscalePanel(QWidget):
 
     def _persist(self) -> None:
         s = self.settings
-        s["upscale_model"] = self.model_group.value() or upscale.DEFAULT_MODEL_ID
+        s["upscale_model"] = self.model_box.value() or upscale.DEFAULT_MODEL_ID
         s["upscale_device"] = self.device.value() or "auto"
         s["upscale_mode"] = self.mode.value() or "scale"
         try:
-            s["upscale_scale"] = int(self.scale_group.value() or self.model.default_scale)
+            s["upscale_scale"] = self._current_scale()
         except (TypeError, ValueError):
             s["upscale_scale"] = self.model.default_scale
         s["upscale_preset"] = self.preset_group.value() or "1080p"
@@ -319,7 +339,7 @@ class UpscalePanel(QWidget):
     # ------------------------------------------------------------- 对外 --
     def set_enabled(self, enabled: bool) -> None:
         for widget in (
-            self.model_group,
+            self.model_box,
             self.device,
             self.mode,
             self.scale_group,
@@ -340,10 +360,10 @@ class UpscalePanel(QWidget):
         preset = self.preset_group.value() or "1080p"
         denoise = self.denoise_group.value()
         return upscale.UpscaleOptions(
-            model_id=self.model_group.value() or upscale.DEFAULT_MODEL_ID,
+            model_id=self.model_box.value() or upscale.DEFAULT_MODEL_ID,
             device=self.device.value() or "auto",
             mode=mode,
-            scale=int(self.scale_group.value() or self.model.default_scale),
+            scale=self._current_scale(),
             preset=preset,
             custom_width=int(self.custom_w.value()),
             custom_height=int(self.custom_h.value()),

@@ -64,6 +64,14 @@ _PARAM_RE = re.compile(
 #: ncnn 崩溃时 Windows 异常码在 Python 里是负的返回码（如 0xC0000005 → -1073741819）。
 _CRASH_RE = re.compile(r"返回码 (-?\d+)")
 
+#: UI 里的倍率选项。1× 只做格式转换不调用模型；超过模型单轮上限的倍率
+#: 由多轮推理组合实现（例如 8× = 4× × 2×）。
+SCALE_CHOICES: tuple[int, ...] = (1, 2, 3, 4, 8, 16, 32)
+
+#: 输出尺寸护栏：极端倍率（如 32× 的大图）会直接吃满内存，提前拒绝。
+MAX_OUTPUT_PIXELS = 250_000_000
+MAX_OUTPUT_SIDE = 32768
+
 
 @dataclass
 class UpscaleOptions:
@@ -193,6 +201,50 @@ def _resolve_scale(model: ModelSpec, requested) -> tuple[int, str | None]:
         return wanted, None
     effective = _preferred_scale(model, wanted)
     return effective, f"{model.name} 不支持 {wanted}×，已改用 {effective}×"
+
+
+def scale_passes(model: ModelSpec | str, wanted: int) -> tuple[int, ...]:
+    """把请求倍率拆成多轮模型推理（每轮都是模型真实支持的倍率）。
+
+    Real-CUGAN 单轮最多 4×，因此 8×/16×/32× 用组合实现，例如
+    32× = 4× → 4× → 2×。请求倍率本身可用时直接单轮返回；
+    请求 1× 或更小时返回空元组（不调用模型，只做格式转换）。
+    """
+    spec = get_model(model) if isinstance(model, str) else model
+    try:
+        wanted = int(wanted)
+    except (TypeError, ValueError):
+        wanted = int(spec.default_scale) or 2
+    if wanted <= 1:
+        return ()
+    available = tuple(scale for scale in _available_scales(spec) if scale >= 2)
+    if not available:
+        return (max(2, int(spec.default_scale) or 2),)
+    if wanted in available:
+        return (wanted,)
+
+    passes: list[int] = []
+    product = 1
+    largest = available[-1]
+    while product < wanted:
+        remaining = wanted / product
+        choice = next((scale for scale in reversed(available) if scale <= remaining + 1e-9), None)
+        if choice is None:
+            choice = largest
+        passes.append(choice)
+        product *= choice
+    return tuple(passes)
+
+
+def guard_output_size(width: int, height: int, *, warnings: list[str] | None = None) -> None:
+    """输出尺寸护栏；超限时抛中文 ValueError（单张失败，不影响整批）。"""
+    width = max(1, int(width))
+    height = max(1, int(height))
+    if width * height > MAX_OUTPUT_PIXELS or max(width, height) > MAX_OUTPUT_SIDE:
+        raise ValueError(
+            f"输出尺寸过大（约 {width} × {height}，限制为 2.5 亿像素 / 边长 {MAX_OUTPUT_SIDE}），"
+            "请降低倍率或改用目标尺寸"
+        )
 
 
 def supported_denoise_levels(model: ModelSpec, scale: int) -> tuple[int, ...]:
@@ -587,6 +639,45 @@ def _infer(
     raise last_error  # pragma: no cover - 循环至少会 raise 或 return
 
 
+def _infer_chain(
+    image: Image.Image,
+    model: ModelSpec,
+    passes: tuple[int, ...],
+    options: UpscaleOptions,
+    warnings: list[str],
+    progress,
+    cancel,
+    *,
+    base: float = 0.05,
+    span: float = 0.9,
+) -> Image.Image:
+    """按倍率链连续推理，把进度切成 N 段；每轮都可取消。"""
+    if not passes:
+        return image
+    current = image
+    total = len(passes)
+    for index, scale in enumerate(passes):
+        if cancel and cancel():
+            raise UpscaleCancelled("已取消")
+        if progress is not None:
+            _notify(
+                progress,
+                f"第 {index + 1}/{total} 轮：模型放大 {scale}×",
+                base + span * index / total,
+            )
+            sub = (
+                lambda message, fraction, index=index: _notify(
+                    progress,
+                    message,
+                    base + span * (index + max(0.0, min(1.0, float(fraction)))) / total,
+                )
+            )
+        else:
+            sub = None
+        current = _infer(current, model, scale, options, warnings, sub, cancel)
+    return current
+
+
 # --------------------------------------------------------- 单文件入口 --
 def upscale_file(
     src: Path,
@@ -638,24 +729,49 @@ def upscale_file(
             target_w, target_h = target
             width = max(1, result.src_width)
             height = max(1, result.src_height)
+            guard_output_size(target_w, target_h)
             needed = max(target_w / width, target_h / height)
             if needed <= 1.0:
                 result.warnings.append("源图已达到目标尺寸，仅做缩放")
                 _notify(progress, "缩放图像", 0.3)
                 image = image.resize((target_w, target_h), Image.Resampling.LANCZOS)
             else:
-                scale = _preferred_scale(model, needed)
-                image = _infer(image, model, scale, options, result.warnings, progress, cancel)
-                result.model_scale = scale
+                passes = scale_passes(model, int(needed + 0.999))
+                if len(passes) > 1:
+                    result.warnings.append(
+                        f"目标尺寸需要 {len(passes)} 轮模型放大组合（单轮最多 {max(passes)}×），耗时较长"
+                    )
+                image = _infer_chain(image, model, passes, options, result.warnings, progress, cancel)
+                result.model_scale = 1
+                for scale in passes:
+                    result.model_scale *= scale
                 if image.size != (target_w, target_h):
                     _notify(progress, "校正到目标尺寸", 0.9)
                     image = image.resize((target_w, target_h), Image.Resampling.LANCZOS)
         else:
-            scale, note = _resolve_scale(model, options.scale)
-            if note:
-                result.warnings.append(note)
-            image = _infer(image, model, scale, options, result.warnings, progress, cancel)
-            result.model_scale = scale
+            try:
+                wanted = max(1, int(options.scale))
+            except (TypeError, ValueError):
+                wanted = max(1, int(model.default_scale) or 2)
+            guard_output_size(result.src_width * wanted, result.src_height * wanted)
+            if wanted == 1:
+                result.warnings.append("1× 不调用模型，只做格式转换/重新编码")
+                image = image
+                result.model_scale = 1
+            else:
+                passes = scale_passes(model, wanted)
+                if len(passes) > 1:
+                    result.warnings.append(
+                        f"{wanted}× 由 {len(passes)} 轮模型放大组合而成（单轮最多 {max(passes)}×），耗时成倍增加"
+                    )
+                image = _infer_chain(image, model, passes, options, result.warnings, progress, cancel)
+                result.model_scale = 1
+                for scale in passes:
+                    result.model_scale *= scale
+                exact = (result.src_width * wanted, result.src_height * wanted)
+                if image.size != exact:
+                    _notify(progress, "校正到目标倍率", 0.9)
+                    image = image.resize(exact, Image.Resampling.LANCZOS)
 
         dest = _resolve_destination(
             source,
@@ -686,6 +802,9 @@ def upscale_file(
         result.message = f"意外错误：{exc}"
     finally:
         result.seconds = round(time.perf_counter() - started, 3)
+
+    # 多轮推理会重复追加同一类警告（如 CPU 透明通道），去重后展示更干净。
+    result.warnings = list(dict.fromkeys(result.warnings))
 
     if not result.ok and result.dest and result.dest.exists():
         try:
@@ -776,8 +895,8 @@ def estimate_output_size(width: int, height: int, options: UpscaleOptions) -> tu
         )
         return target if target is not None else (width, height)
     try:
-        scale, _ = _resolve_scale(model, options.scale)
-    except Exception:  # noqa: BLE001
+        scale = max(1, int(options.scale))
+    except (TypeError, ValueError):
         scale = max(1, int(model.default_scale) or 2)
     return (max(1, width * scale), max(1, height * scale))
 

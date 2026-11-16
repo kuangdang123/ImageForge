@@ -31,6 +31,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
+    QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
@@ -538,6 +539,88 @@ class SegmentedControl(ThemeAware):
 
 
 # ------------------------------------------------------------------ 开关 --
+class SelectBox(QComboBox):
+    """下拉选择框：原生弹出列表 + 自绘箭头，和胶囊/分段控件同一套 token。
+
+    选项目的是「选项少但文案长」的场景（例如模型选择），
+    比一排胶囊省高度，也比原生 QComboBox 更贴主题。
+    """
+
+    valueChanged = Signal(str)
+
+    def __init__(
+        self,
+        theme: Theme,
+        options: Iterable[tuple[str, str]] = (),
+        parent: QWidget | None = None,
+        *,
+        height: int = 36,
+    ) -> None:
+        super().__init__(parent)
+        self.theme = theme
+        self._options: list[tuple[str, str]] = []
+        self.setObjectName("SelectBox")
+        self.setFont(theme.font("body"))
+        self.setFixedHeight(height)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.set_options(options)
+        self.currentIndexChanged.connect(self._on_index_changed)
+        theme.changed.connect(self.update)
+
+    # ------------------------------------------------------------- 数据 --
+    def set_options(self, options: Iterable[tuple[str, str]], *, keep_value: bool = True) -> None:
+        current = self.value() if keep_value else ""
+        previous = self._options
+        self._options = [(str(key), str(label)) for key, label in options]
+        blocked = self.blockSignals(True)
+        self.clear()
+        for key, label in self._options:
+            self.addItem(label, key)
+        self.blockSignals(blocked)
+        keys = [key for key, _ in self._options]
+        if current and current in keys:
+            self.set_value(current, emit=False)
+        elif previous and any(key == previous[0][0] for key in keys):
+            self.set_value(previous[0][0], emit=False)
+        elif self._options:
+            self.setCurrentIndex(0)
+
+    def value(self) -> str:
+        data = self.currentData()
+        return str(data) if data is not None else ""
+
+    def set_value(self, value: str, *, emit: bool = False) -> None:
+        target = str(value)
+        for index, (key, _label) in enumerate(self._options):
+            if key == target:
+                blocked = self.signalsBlocked()
+                self.blockSignals(True)
+                self.setCurrentIndex(index)
+                self.blockSignals(blocked)
+                if emit and blocked is False:
+                    self.valueChanged.emit(target)
+                return
+
+    def _on_index_changed(self, _index: int) -> None:
+        if self.signalsBlocked() or not self._options:
+            return
+        self.valueChanged.emit(self.value())
+
+    # ------------------------------------------------------------- 绘制 --
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        size = 16
+        dpr = float(self.devicePixelRatioF() or 1.0)
+        icon = self.theme.icon("chevron_down", "text_disabled" if self.isEnabled() else "text_disabled", size)
+        pixmap = icon.pixmap(QSize(size, size), dpr)
+        x = self.width() - size - 12
+        y = (self.height() - size) // 2
+        painter.drawPixmap(x, y, pixmap)
+        painter.end()
+
+
 class Switch(QAbstractButton):
     def __init__(self, theme: Theme, parent: QWidget | None = None) -> None:
         super().__init__(parent)

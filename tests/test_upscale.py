@@ -32,9 +32,11 @@ from imgforge.upscale import (  # noqa: E402
     estimate_output_size,
     fit_inside,
     get_model,
+    guard_output_size,
     models_sorted,
     ncnn_exe,
     preferred_model_scale,
+    scale_passes,
     supported_denoise_levels,
     upscale_file,
     weights_root,
@@ -183,15 +185,15 @@ class EstimateTest(unittest.TestCase):
         options = UpscaleOptions(model_id="cugan-se", mode="scale", scale=4)
         self.assertEqual(estimate_output_size(200, 520, options), (800, 2080))
 
-    def test_estimate_scale_mode_unavailable_scale_falls_back(self) -> None:
-        # pro 不支持 4×，_preferred_scale 退回最大可用 3×
+    def test_estimate_scale_mode_composes_unsupported_scale(self) -> None:
+        # pro 单轮只有 2×/3×，4× 由多轮组合实现，最终尺寸仍是精确 4×
         options = UpscaleOptions(model_id="cugan-pro", mode="scale", scale=4)
-        self.assertEqual(estimate_output_size(200, 520, options), (600, 1560))
+        self.assertEqual(estimate_output_size(200, 520, options), (800, 2080))
 
-    def test_estimate_scale_mode_unsupported_by_weights_falls_back(self) -> None:
-        # nose 只带 up2x 权重，请求 1× 应回退到 2×（绝不把 up1x 传给 exe）
+    def test_estimate_scale_mode_one_x_keeps_size(self) -> None:
+        # 1× 不调用模型，只做重新编码
         options = UpscaleOptions(model_id="cugan-nose", mode="scale", scale=1)
-        self.assertEqual(estimate_output_size(200, 520, options), (400, 1040))
+        self.assertEqual(estimate_output_size(200, 520, options), (200, 520))
 
     def test_estimate_target_mode(self) -> None:
         options = UpscaleOptions(mode="target", preset="1080p")
@@ -354,6 +356,62 @@ class CpuRetryTest(unittest.TestCase):
         self.assertEqual(calls, ["cpu"])
         self.assertIn("推理失败", result.message)
         self.assertNotIn("CPU 模式不可用，已改用 GPU", result.warnings)
+
+
+class MultiScaleTest(unittest.TestCase):
+    """多轮组合放大（8×/16×/32×）与 1× 直通。"""
+
+    def test_scale_choices_are_powers_of_two(self) -> None:
+        from imgforge.upscale import SCALE_CHOICES
+
+        for value in (1, 2, 4, 8, 16, 32):
+            self.assertIn(value, SCALE_CHOICES)
+
+    def test_scale_passes_single_when_model_supports_it(self) -> None:
+        self.assertEqual(scale_passes("cugan-se", 4), (4,))
+        self.assertEqual(scale_passes("cugan-pro", 3), (3,))
+        self.assertEqual(scale_passes("cugan-se", 2), (2,))
+
+    def test_scale_passes_compose_large_factors(self) -> None:
+        for model_id in ("cugan-se", "cugan-pro"):
+            for wanted in (8, 16, 32):
+                passes = scale_passes(model_id, wanted)
+                self.assertTrue(passes, f"{model_id} {wanted}")
+                self.assertLessEqual(max(passes), 4, f"{model_id} {wanted} 单轮超过 4×")
+                product = 1
+                for scale in passes:
+                    product *= scale
+                self.assertGreaterEqual(product, wanted, f"{model_id} {wanted} 组合不够")
+
+    def test_scale_passes_one_means_no_model(self) -> None:
+        self.assertEqual(scale_passes("cugan-se", 1), ())
+        self.assertEqual(scale_passes("cugan-se", 0), ())
+
+    def test_guard_output_size_blocks_huge_results(self) -> None:
+        guard_output_size(8000, 8000)
+        with self.assertRaises(ValueError):
+            guard_output_size(20000, 20000)
+        with self.assertRaises(ValueError):
+            guard_output_size(100, 40000)
+
+    def test_estimate_scale_mode_supports_composed_scale(self) -> None:
+        options = UpscaleOptions(model_id="cugan-se", mode="scale", scale=8)
+        self.assertEqual(estimate_output_size(100, 50, options), (800, 400))
+        options = UpscaleOptions(model_id="cugan-se", mode="scale", scale=16)
+        self.assertEqual(estimate_output_size(100, 50, options), (1600, 800))
+
+    def test_upscale_one_x_skips_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "small.png"
+            Image.new("RGBA", (32, 24), (10, 20, 30, 180)).save(source)
+            options = UpscaleOptions(model_id="cugan-se", mode="scale", scale=1, output_format="png")
+            result = upscale_file(source, options, root / "out")
+            self.assertTrue(result.ok, result.message)
+            self.assertTrue(result.dest and result.dest.exists())
+            self.assertEqual((result.width, result.height), (32, 24))
+            self.assertEqual(result.model_scale, 1)
+            self.assertTrue(any("1×" in item for item in result.warnings), result.warnings)
 
 
 if __name__ == "__main__":
