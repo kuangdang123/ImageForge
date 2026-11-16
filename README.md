@@ -270,6 +270,7 @@ python tools/check_contrast.py                # 明暗两套色板 WCAG 校验
 python tools/qt_smoke.py                      # 离屏跑完整流程
 python tools/qt_settings_smoke.py             # 设置改动 → 关窗 → 重新加载是否保留
 python tools/qt_upscale_smoke.py              # 离屏冒烟：放大页 + 真实推理
+python app2.pyw --check                       # 自检：权重是否存在 + 跑一张 64px 小图
 python tools/qt_shot.py light tmp\a.png       # 真实窗口截图（dark / --picker / --preview / --convert / --upscale）
 python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 100 MB，含超分权重）
 ```
@@ -326,6 +327,8 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 **三个模型怎么选？** 画质优先选 `Pro`（2× / 3×，细节最强）；需要 4× 或通用场景选 `SE`；只想快速放大一批、对细节要求不高选 `NoSE`（只支持 2×）。
 
 **放大后透明背景会不会变黑？** 不会。带 alpha 的 PNG 在 CPU 模式下会把透明通道单独放大再合并，输出仍是透明 PNG（输出格式选 PNG / WebP 时）。
+
+**怎么确认超分功能是好的？** 命令行运行 `python app2.pyw --check`（打包版直接 `ImageForge.exe --check`），它会检查权重并真的放大一张 64×64 小图，最后一行是 `result: OK`；打包版没有控制台，同样的内容写在 `%TEMP%\\ImageForge-selftest.txt`。
 
 **放大后的文件在哪？** 与转换页一致：默认放源文件旁边，也可以在「保存到」里指定文件夹；文件名默认追加 `_upscaled`，永远不会覆盖原图。
 
