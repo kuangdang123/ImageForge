@@ -195,6 +195,10 @@ class SettingsPanel(QWidget):
     def _emit(self) -> None:
         if self._building:
             return
+        self.commit()
+
+    def commit(self) -> None:
+        """把当前控件状态写回 settings，并通知外部（主窗据此延迟落盘）。"""
         self._persist()
         self._sync_visibility()
         self.changed.emit()

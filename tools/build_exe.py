@@ -16,8 +16,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
 DIST = ROOT / "dist"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-QT_VERSION = "2.0.0"
+from imgforge.version import __version__  # noqa: E402
+
+QT_VERSION = __version__
 TK_VERSION = "1.0.0"
 
 VERSION_TEMPLATE = """VSVersionInfo(

@@ -1,8 +1,8 @@
-# ImageForge 2.0
+# ImageForge 2.0.1
 
 把 PNG / JPG / WebP / BMP / GIF / TIFF / AVIF 互转，并且一键生成**多尺寸 Windows 图标**的桌面小工具。
 
-界面用 PySide6（Qt 6）重写：原生控件、明暗两套主题、1.5× 高 DPI 下依然锐利。
+界面用 PySide6（Qt 6）重写：原生控件、明暗两套主题、1.5× 高 DPI 下依然锐利；所有偏好（格式、尺寸、质量、主题、窗口大小）下次启动自动恢复。
 转换全部在本机完成，不依赖浏览器、不上传文件、不需要联网。
 
 **[下载发布版](https://github.com/kuangdang123/ImageForge/releases/latest)** —— 单个 `ImageForge.exe`，不需要装 Python。
@@ -206,13 +206,14 @@ ImageForge/
 │  ├─ converter.py           格式表、单文件转换、批量任务
 │  ├─ ico.py                 ICO 渲染与容器编码
 │  ├─ settings.py            设置读写
+│  ├─ version.py             版本号（界面徽标、exe 版本信息共用）
 │  ├─ single_instance.py     互斥体 + 激活已开窗口
 │  ├─ cli.py                 命令行
 │  ├─ __main__.py            模块入口（无参数开 GUI）
 │  ├─ gui.py / widgets.py / theme.py / picker.py   1.x tkinter 界面
 │  └─ assets/                应用图标与 logo
 ├─ samples/                  示例图片
-├─ tests/                    35 个单元测试（格式转换 + 挑图 + 单实例）
+├─ tests/                    42 个单元测试（格式转换 + 挑图 + 单实例 + 设置持久化）
 ├─ tools/
 │  ├─ make_icon.py           从 assets/logo.png 重新生成 assets/app.ico
 │  ├─ check_contrast.py      色板对比度校验
@@ -229,15 +230,36 @@ ImageForge/
 ## 开发
 
 ```powershell
-python -m unittest discover -s tests          # 35 个测试
+python -m unittest discover -s tests          # 42 个测试
 python tools/make_icon.py                     # 从 assets/logo.png 生成多尺寸 app.ico
 python tools/check_contrast.py                # 明暗两套色板 WCAG 校验
 python tools/qt_smoke.py                      # 离屏跑完整流程
+python tools/qt_settings_smoke.py             # 设置改动 → 关窗 → 重新加载是否保留
 python tools/qt_shot.py light tmp\a.png       # 真实窗口截图（dark / --picker / --preview / --convert）
 python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 52 MB）
 ```
 
 开发脚本把配置写到 `tmp/settings/`（通过 `IMAGEFORGE_HOME` 环境变量重定向），不会动 `%APPDATA%` 里的真实配置。
+
+## 更新日志
+
+### 2.0.1
+
+- 设置面板的改动（格式、尺寸、质量、ICO 细节、其它开关）现在会在 350 ms 去抖后立即落盘，关窗时再存一次；不再依赖“正常退出才会写文件”。
+- 版本号改为由 `imgforge/version.py` 统一提供，界面徽标、exe 属性、打包脚本共用同一个值。
+- 新增 7 个设置读写单元测试与 `tools/qt_settings_smoke.py`（改设置 → 关窗 → 重启校验），共 42 个测试。
+
+### 2.0.0
+
+- 界面从 tkinter 重写为 PySide6（Qt 6）：卡片式布局、明暗双主题、1.5× 高 DPI 下清晰。
+- 新增命令栏、输出到「源文件旁 / 指定文件夹」分段控件、状态胶囊、Toast 提示。
+- 预览窗口支持查看 ICO 每一档尺寸的真实渲染结果。
+- 从文件夹挑图窗口重做：搜索、全选/连选、已在列表标记、缩略图异步加载。
+- 单实例、拖拽、快捷键与 1.x 保持一致；转换引擎不变。
+
+### 1.0.0
+
+- tkinter 版本，见标签 `v1.0.0`。
 
 ## 常见问题
 
@@ -252,6 +274,8 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 **已经开着一个窗口，再双击好像没反应？** 这是单实例行为：新进程会把已经开着的窗口提到前台，然后自己退出，避免开出一堆重复窗口。
 
 **挑图时有些行是灰的、右边写着「已在列表」？** 这些图已经在待处理队列里了，重复勾选不会重复添加。
+
+**设置会保存吗？** 会。输出格式、质量、ICO 尺寸与细节、其它开关、主题、窗口大小、上次目录都写在 `%APPDATA%\ImageForge\settings.json`，下次启动自动恢复；改完 0.35 秒就在后台落盘，即使直接关进程也不会丢。
 
 **动图不动了？** 只有 WebP 和 GIF 作为输出格式才支持动图，其它格式只取第一帧。
 

@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from .. import converter, ico
 from ..settings import Settings
+from ..version import __version__
 from . import icons
 from .preview import PreviewDialog
 from .queueview import FileModel, FilePanel, QueueItem, THUMB_SIZE
@@ -150,6 +151,11 @@ class MainWindow(QMainWindow):
         self._convert_done = 0
         self._convert_failed = 0
         self._last_output: Path | None = None
+        # 设置项改动后延迟落盘：连续拖滑杆时不会反复写文件。
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(350)
+        self._save_timer.timeout.connect(self._flush_settings)
 
         self.setWindowTitle("ImageForge · 图片格式转换")
         self.setWindowIcon(QIcon(str(ASSETS / "app.ico")))
@@ -208,7 +214,7 @@ class MainWindow(QMainWindow):
         title_row.setSpacing(8)
         title = QLabel("ImageForge")
         title.setFont(theme.font("h1"))
-        badge = QLabel("2.0")
+        badge = QLabel(__version__)
         badge.setObjectName("VersionBadge")
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setFixedHeight(20)
@@ -594,6 +600,12 @@ class MainWindow(QMainWindow):
 
     def _on_options_changed(self) -> None:
         self._sync_state()
+        self._save_timer.start()
+
+    def _flush_settings(self) -> None:
+        """把内存里的偏好写入磁盘（断电/强杀也不会丢）。"""
+        self._save_timer.stop()
+        self.settings.save()
 
     def open_output_dir(self) -> None:
         target: Path | None = None

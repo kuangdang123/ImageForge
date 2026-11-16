@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from .. import single_instance
 from ..settings import Settings
+from ..version import __version__
 from .mainwindow import MainWindow
 from .theme import Theme
 
@@ -47,7 +48,7 @@ def build_app(argv: list[str]) -> QApplication:
     app = QApplication(argv)
     app.setApplicationName("ImageForge")
     app.setOrganizationName("ImageForge")
-    app.setApplicationVersion("2.0.0")
+    app.setApplicationVersion(__version__)
     app.setWindowIcon(QIcon(str(ASSETS / "app.ico")))
     app.setStyle("Fusion")
     app.setFont(QFont("Microsoft YaHei UI", 10))
