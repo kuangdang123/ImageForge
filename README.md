@@ -66,7 +66,7 @@ pip install -r requirements.txt
 
 启动器会优先找同目录下的 `ImageForge.exe`，没有才退回 `pythonw` / `pyw` / `python`。
 
-> 1.x 的 tkinter 版本仍然保留在标签 `v1.0.0` 与 `app.pyw` / `启动 ImageForge.bat` 里，可以继续用；2.0 是独立的 `app2.pyw` 与 `imgforge/qt/`。
+> 1.x 的 tkinter 版本仍然保留在标签 `v1.0.0` 与 `app.pyw` / `启动 ImageForge 1.x.bat` 里，可以继续用；2.0 是独立的 `app2.pyw` 与 `imgforge/qt/`。
 
 ## 使用
 
@@ -216,7 +216,7 @@ Windows 图标不是「一张 256×256 的 PNG」那么简单：任务栏、标�
 ImageForge/
 ├─ app2.pyw                  2.0 桌面入口（PySide6）
 ├─ 启动 ImageForge 2.0.bat   2.0 启动器
-├─ app.pyw / 启动 ImageForge.bat   1.x（tkinter）入口
+├─ app.pyw / 启动 ImageForge 1.x.bat   1.x（tkinter）入口
 ├─ requirements.txt
 ├─ imgforge/
 │  ├─ qt/                    2.0 界面（PySide6）
