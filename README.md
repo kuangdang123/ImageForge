@@ -1,4 +1,4 @@
-# ImageForge 2.2.0
+# ImageForge 2.3.0
 
 把 PNG / JPG / WebP / BMP / GIF / TIFF / AVIF 互转、一键生成**多尺寸 Windows 图标**，还能把图片**无损放大 2–4 倍**或用 Real-CUGAN 超分到 1080p / 2K / 4K / 8K 的桌面小工具。
 
@@ -30,7 +30,7 @@
 
 - **多尺寸 ICO**：一次输出 16 / 24 / 32 / 48 / 64 / 128 / 256 七档，每档独立重采样，不是把一张大图塞进去。
 - **常用格式互转**：PNG、JPG、WebP、BMP、GIF、TIFF、AVIF 任意方向。
-- **分辨率放大**：Real-CUGAN（ncnn/Vulkan）三档模型下拉选择、按性能排序，支持按倍数（`1×`–`32×`，8× 及以上由多轮模型组合）或按目标尺寸（720p / 1080p / 2K / 4K / 8K / 自定义）放大；设备默认 `自动`（优先 GPU，不可用时回退 CPU），针对动漫 / 二次元 / 游戏立绘做了调优。
+- **分辨率放大**：Real-CUGAN（ncnn/Vulkan）三档模型下拉选择、按性能排序，每个模型后面带彩色短标签（画质 / 动漫 / 均衡 / 最快 / 轻量）方便一眼挑；支持按倍数（`1×`–`32×`，8× 及以上由多轮模型组合）或按目标尺寸（720p / 1080p / 2K / 4K / 8K / 自定义）放大；设备默认 `自动`（优先 GPU，不可用时回退 CPU），针对动漫 / 二次元 / 游戏立绘做了调优。模型按需下载，不占 exe 体积。
 - **文件夹里挑图**：「选择文件夹…」打开图片列表，搜索、全选、Shift 连选，只把想要的几张加进队列。
 - **批处理**：拖入文件或文件夹、粘贴剪贴板图片、递归扫描子目录、保留目录结构。
 - **可控输出**：有损质量滑杆、WebP 无损、保留 EXIF / ICC、文件名后缀、输出到源文件旁边或指定文件夹；放大页还能选择保持原格式或另存 PNG / JPG / WebP。
@@ -42,7 +42,9 @@
 
 ### 方式一：下载现成的 exe（不需要 Python）
 
-从 [Releases](https://github.com/kuangdang123/ImageForge/releases/latest) 下载 `ImageForge.exe`（约 100 MB，含超分权重），放到任意文件夹双击即可。单文件、免安装，第一次启动会先解压到临时目录，慢一两秒。
+从 [Releases](https://github.com/kuangdang123/ImageForge/releases/latest) 下载 `ImageForge.exe`（约 52 MB），放到任意文件夹双击即可。单文件、免安装，第一次启动会先解压到临时目录，慢一两秒。
+
+> 2.3.0 起超分模型不再塞进 exe：第一次切到「分辨率放大」时，右侧卡片会让你点「下载模型」（约 44 MB，一次安装离线可用）；也可以下载 [`realcugan-ncnn-models.zip`](https://github.com/kuangdang123/ImageForge/releases/download/models-v1/realcugan-ncnn-models.zip) 后点「从文件安装…」。只做格式转换的话完全不需要模型。
 
 重复双击不会再开第二个窗口，而是把已经开着的窗口提到前面来。
 
@@ -110,10 +112,14 @@ pip install -r requirements.txt
 
 ![分辨率放大页](docs/screenshots/qt-upscale-light.png)
 
-- **模型**：下拉选择，按性能从强到弱排列。
-  - `Real-CUGAN Pro`：细节最强，支持 2× / 3×，动漫、游戏立绘首选，速度最慢；
-  - `Real-CUGAN SE`：均衡，支持 2× / 3× / 4×，通用性最好；
-  - `Real-CUGAN NoSE`：最轻快，只做 2×，适合批量快速处理。
+- **模型**：下拉选择，按性能从强到弱排列，每项右侧有彩色标签：
+  - `Real-CUGAN Pro`：`画质` `动漫` `较慢` —— 细节最强，支持 2× / 3×，动漫、游戏立绘首选，速度最慢；
+  - `Real-CUGAN SE`：`均衡` `通用` —— 支持 2× / 3× / 4×，通用性最好；
+  - `Real-CUGAN NoSE`：`最快` `轻量` —— 只做 2×，适合批量快速处理。
+
+  标签含义：`画质` = 细节最好但最慢；`均衡` = 画质与速度折中；`最快` = 速度优先；`动漫` = 针对二次元线条/色块调优；`轻量` = 权重小、内存占用低；`较慢` = 单张耗时明显更长。
+
+  > 第一次使用放大功能时右侧只会显示一张「放大模型」卡片：点「下载模型」自动下载并安装（约 44 MB，带进度条，只需一次）；离线或内网环境可以下载 `realcugan-ncnn-models.zip` 后点「从文件安装…」。默认装到 `%LOCALAPPDATA%\ImageForge\models`；把 `models` 文件夹放到 exe 同目录就是便携模式；开发态如果仓库里有 `imgforge/upscale/weights` 会直接用，不需要下载。
 - **设备**：默认 `自动`，优先用 GPU（Vulkan），显卡不可用时自动回退 CPU；也可以手动锁定 `GPU` / `CPU`。
 - **两种放大方式**（互相独立，不是同一件事）：
   - `按倍数`：`1× / 2× / 3× / 4× / 8× / 16× / 32×`。模型单轮最多放 4×，8× 及以上由多轮模型推理组合而成（例如 32× = 4× → 4× → 2×），最后再校正到精确倍率；`1×` 不调用模型，只做重新编码；
@@ -172,6 +178,15 @@ wide_banner.png  256×256  10.4 KB   wide_banner.ico  完成
 
 有文件失败时进程返回码为 `1`，方便脚本判断。
 
+程序级参数（`app2.pyw` 与打包后的 `ImageForge.exe` 通用）：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--check` | 自检：模型/推理程序是否可用，并真的放大一张 64×64 小图 |
+| `--check --require-models` | 同上，但模型未安装时返回失败 |
+| `--install-models` | 无界面下载放大模型（约 44 MB） |
+| `--theme light/dark/system` | 强制主题 |
+
 ## 关于 ICO
 
 Windows 图标不是「一张 256×256 的 PNG」那么简单：任务栏、标题栏、文件列表用的尺寸各不相同，系统会按需挑最接近的一档，没有就自己缩——通常比我们预先做好的模糊。
@@ -210,6 +225,8 @@ Windows 图标不是「一张 256×256 的 PNG」那么简单：任务栏、标�
 
 `%APPDATA%\ImageForge\settings.json` —— 当前页（转换 / 放大）、主题、输出格式、质量、ICO 选项、放大模型 / 设备 / 倍率 / 目标尺寸 / 降噪、窗口大小、上次目录等。删掉它就恢复默认。
 
+放大模型默认装在 `%LOCALAPPDATA%\ImageForge\models`（约 51 MB 解压后）；可以设置 `IMAGEFORGE_MODELS_DIR` 环境变量指定别的位置，或把 `models` 放在 exe 同目录启用便携模式。
+
 转换产物不会写进程序目录，只有你指定的输出路径。
 
 ## 项目结构
@@ -236,8 +253,9 @@ ImageForge/
 │  ├─ upscale/               分辨率放大
 │  │  ├─ catalog.py          Real-CUGAN 模型目录（性能排序、倍率、降噪档位）
 │  │  ├─ targets.py          目标尺寸预设与缩放计算
-│  │  ├─ engine.py           ncnn 子进程推理、透明通道、错误翻译
-│  │  └─ weights/ncnn/       realcugan-ncnn-vulkan.exe 与三套模型权重
+│  │  ├─ engine.py           ncnn 子进程推理、透明通道、错误翻译、模型路径解析
+│  │  ├─ download.py         模型包下载 / sha256 校验 / 解压安装
+│  │  └─ weights/ncnn/       realcugan-ncnn-vulkan.exe 与三套模型权重（源码运行自带；exe 不含）
 │  ├─ converter.py           格式表、单文件转换、批量任务
 │  ├─ ico.py                 ICO 渲染与容器编码
 │  ├─ settings.py            设置读写
@@ -248,7 +266,7 @@ ImageForge/
 │  ├─ gui.py / widgets.py / theme.py / picker.py   1.x tkinter 界面
 │  └─ assets/                应用图标与 logo
 ├─ samples/                  示例图片
-├─ tests/                    87 个单元测试（格式转换 + 挑图 + 单实例 + 设置 + 超分）
+├─ tests/                    96 个单元测试（格式转换 + 挑图 + 单实例 + 设置 + 超分 + 模型安装）
 ├─ tools/
 │  ├─ make_icon.py           从 assets/logo.png 重新生成 assets/app.ico
 │  ├─ check_contrast.py      色板对比度校验
@@ -256,6 +274,8 @@ ImageForge/
 │  ├─ entry_qt.py / entry_gui.py        exe 入口脚本
 │  ├─ qt_smoke.py            离屏冒烟：添加 → 转换 → 预览 → 挑图
 │  ├─ qt_upscale_smoke.py    离屏冒烟：添加 → 切到放大页 → 真实推理一张
+│  ├─ qt_models_smoke.py     离屏冒烟：未安装模型 → 安装卡片 → 安装后恢复
+│  ├─ pack_models.py         打包 dist/models/realcugan-ncnn-models.zip
 │  ├─ qt_shot.py             真实平台界面截图
 │  ├─ shot_window.py         按标题截取任意窗口（含打包后的 exe）
 │  ├─ gui_smoke.py / picker_smoke.py   1.x 界面冒烟
@@ -266,20 +286,30 @@ ImageForge/
 ## 开发
 
 ```powershell
-python -m unittest discover -s tests          # 87 个测试
+python -m unittest discover -s tests          # 96 个测试
 python tools/make_icon.py                     # 从 assets/logo.png 生成多尺寸 app.ico
 python tools/check_contrast.py                # 明暗两套色板 WCAG 校验
 python tools/qt_smoke.py                      # 离屏跑完整流程
 python tools/qt_settings_smoke.py             # 设置改动 → 关窗 → 重新加载是否保留
 python tools/qt_upscale_smoke.py              # 离屏冒烟：放大页 + 真实推理
-python app2.pyw --check                       # 自检：权重是否存在 + 跑一张 64px 小图
+python app2.pyw --check                       # 自检：模型是否存在 + 跑一张 64px 小图
+python app2.pyw --install-models              # 无界面下载放大模型（约 44 MB）
+python tools/pack_models.py                   # 打包模型 zip（上传到 models-v1 release）
 python tools/qt_shot.py light tmp\a.png       # 真实窗口截图（dark / --picker / --preview / --convert / --upscale）
-python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 100 MB，含超分权重）
+python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 52 MB，模型不含在内）
 ```
 
 开发脚本把配置写到 `tmp/settings/`（通过 `IMAGEFORGE_HOME` 环境变量重定向），不会动 `%APPDATA%` 里的真实配置。
 
 ## 更新日志
+
+### 2.3.0
+
+- 超分模型从 exe 中拆出，改为首次使用时按需下载（约 44 MB，带进度条与 sha256 校验），也支持从本地 zip 离线安装；exe 从约 96 MB 降到约 52 MB。
+- 模型下拉框每项右侧新增彩色短标签（画质 / 动漫 / 较慢 / 均衡 / 通用 / 最快 / 轻量），一眼就能挑模型；说明文字与标签含义写进了 README 与 FAQ。
+- 未安装模型时放大页只显示「放大模型」卡片（下载模型 / 从文件安装），开始按钮禁用并在状态栏提示；安装后四张设置卡自动恢复。
+- 新增 `--install-models`（无界面下载）与 `--check --require-models`（模型缺失视为失败）；`--check` 在模型未安装时给出友好提示而不是报错。
+- 新增 9 个模型定位 / 安装 / 校验测试与 `tools/qt_models_smoke.py`，测试总数 96。
 
 ### 2.2.0
 
@@ -333,15 +363,19 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 
 **提示「CPU 模式不可用，已改用 GPU」？** 说明当前模型/图片组合在 CPU 上推理失败，程序自动改用 GPU 重试，结果不受影响；这条只是一行提示。
 
-**三个模型怎么选？** 画质优先选 `Pro`（2× / 3×，细节最强）；需要 4× 或通用场景选 `SE`；只想快速放大一批、对细节要求不高选 `NoSE`（只支持 2×）。
+**三个模型怎么选？** 看下拉框里的彩色标签即可：`画质`（Pro，2× / 3×，细节最强）> `均衡`（SE，2× / 3× / 4×，通用）> `最快`（NoSE，只做 2×，批量速度优先）。动漫 / 游戏立绘优先带 `动漫` 标签的 Pro；照片或不确定场景用 `均衡`；只是先把尺寸放大、后面还要再处理就用 `最快`。
 
-**为什么没有 APISR 模型？APISR 是不是不如 Real-CUGAN？** 不是。APISR（CVPR 2024）面向「真实退化」的动画截图复原（模糊、压缩噪点、轻中度瑕疵），GRL 极轻、DAT 画质最高，很多场景确实强于 Real-CUGAN。没有内置是因为它只有 PyTorch 权重：接入需要带 torch/torchvision，exe 会从约 100 MB 涨到 2 GB 以上、启动也明显变慢；而 Real-CUGAN 的 ncnn/Vulkan 版本可以免 Python 依赖直接跑，体积只有 51 MB。如果后续真需要 APISR，可以走 ONNX 转换来保留体积优势。
+**为什么没有 APISR 模型？APISR 是不是不如 Real-CUGAN？** 不是。APISR（CVPR 2024）面向「真实退化」的动画截图复原（模糊、压缩噪点、轻中度瑕疵），GRL 极轻、DAT 画质最高，很多场景确实强于 Real-CUGAN。没有内置是因为它只有 PyTorch 权重：接入需要带 torch/torchvision，PyInstaller 打包后 exe 会从约 52 MB 涨到 1.5–2 GB（torch 本体就有 500 MB，加上 MKL/DLL 更大），启动也明显变慢；而 Real-CUGAN 的 ncnn/Vulkan 版本可以免 Python 依赖直接跑，模型包只有 45.9 MB。如果后续真需要 APISR，可以走 ONNX 转换来保留体积优势。
+
+**为什么 ImageForge-SR.exe 只有 8 MB，却能跑 18 个模型？** 因为那个 exe 不含模型也不含 torch：它依赖本机已经装好的 Python + PyTorch，运行时再到 `weights/` 目录读权重。所以它「轻」的前提是机器上已经有约 1.5 GB 的 Python 环境；本项目的 exe 是自包含的（不要求装 Python），模型单独按需下载。
+
+**模型下载失败 / 公司网络下不了怎么办？** 在 [models-v1 release](https://github.com/kuangdang123/ImageForge/releases/tag/models-v1) 手动下载 `realcugan-ncnn-models.zip`，然后在放大页点「从文件安装…」选择它；也可以命令行 `ImageForge.exe --install-models`（会自动校验 sha256）。
 
 **8× / 16× / 32× 是怎么实现的？** Real-CUGAN 单轮最多 4×，更高倍率由多轮模型推理串联（例如 32× = 4× → 4× → 2×），最后再校正到精确尺寸。倍率越高耗时约成倍增长，输出文件也越大；预计超过 2.5 亿像素或单边 32768 像素时程序会直接拒绝并提示。`1×` 不调用模型，只做格式转换。
 
 **放大后透明背景会不会变黑？** 不会。带 alpha 的 PNG 在 CPU 模式下会把透明通道单独放大再合并，输出仍是透明 PNG（输出格式选 PNG / WebP 时）。
 
-**怎么确认超分功能是好的？** 命令行运行 `python app2.pyw --check`（打包版直接 `ImageForge.exe --check`），它会检查权重并真的放大一张 64×64 小图，最后一行是 `result: OK`；打包版没有控制台，同样的内容写在 `%TEMP%\\ImageForge-selftest.txt`。
+**怎么确认超分功能是好的？** 命令行运行 `python app2.pyw --check`（打包版直接 `ImageForge.exe --check`），它会检查模型并真的放大一张 64×64 小图，最后一行是 `result: OK`；模型没装时显示 `OK (未安装模型)` 并给出安装提示，加上 `--require-models` 则视为失败；打包版没有控制台，同样的内容写在 `%TEMP%\\ImageForge-selftest.txt`。
 
 **放大后的文件在哪？** 与转换页一致：默认放源文件旁边，也可以在「保存到」里指定文件夹；文件名默认追加 `_upscaled`，永远不会覆盖原图。
 
@@ -351,4 +385,6 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 
 **为什么 AVIF 慢？** 编码本身计算量大，批量时耐心等一下；急着用可以先转 WebP。
 
-**打包后的 exe 怎么快 100 MB 了？** 其中约 52 MB 是 PySide6 的 Qt 运行库（已排除 WebEngine、QML、3D 等模块），另外 51 MB 是 Real-CUGAN 的 ncnn 模型权重与推理程序；1.x 的 tkinter 版本只有 23 MB。
+**exe 为什么是 52 MB？** 基本是 PySide6 的 Qt 运行库（已排除 WebEngine、QML、3D 等模块）。2.3.0 起模型不再打进 exe，而是首次使用放大功能时下载 45.9 MB 的模型包；1.x 的 tkinter 版本只有 23 MB。
+
+**模型装在哪？能换位置吗？** 默认 `%LOCALAPPDATA%\ImageForge\models`。设置环境变量 `IMAGEFORGE_MODELS_DIR` 可指定任意目录（只认这个位置，不会偷偷回退）；把 `models` 文件夹放到 exe 同目录则是便携模式，整个文件夹拷走即可。

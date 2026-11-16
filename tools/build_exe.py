@@ -120,9 +120,10 @@ def main() -> int:
     if legacy:
         args.extend(["--collect-all", "tkinterdnd2"])
     else:
-        weights = ROOT / "imgforge" / "upscale" / "weights"
-        if weights.is_dir():
-            args.extend(["--add-data", f"{weights}{';'}imgforge/upscale/weights"])
+        # 模型权重不打包：2.3.0 起改为首次使用时按需下载（约 44 MB），
+        # exe 因此从 ~96 MB 降到 ~45 MB。
+        if (ROOT / "dist" / "models" / "realcugan-ncnn-models.zip").is_file():
+            print("提示：模型包将在 release 资产中单独上传，不打进 exe")
     for name in excludes:
         args.extend(["--exclude-module", name])
     args.append(str(ROOT / "tools" / entry))

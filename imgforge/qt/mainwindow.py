@@ -387,6 +387,7 @@ class MainWindow(QMainWindow):
         self.settings_panel.changed.connect(self._on_options_changed)
         self.upscale_panel = UpscalePanel(theme, self.settings)
         self.upscale_panel.changed.connect(self._on_options_changed)
+        self.upscale_panel.modelsChanged.connect(self._on_models_changed)
         self.panel_stack.addWidget(self.settings_panel)
         self.panel_stack.addWidget(self.upscale_panel)
         self.panel_stack.setCurrentWidget(self.settings_panel if self.mode == "convert" else self.upscale_panel)
@@ -619,6 +620,9 @@ class MainWindow(QMainWindow):
     def _refresh_idle_status(self) -> None:
         items = self.model.items
         total = len(items)
+        if self.mode == "upscale" and not self.upscale_panel.is_ready():
+            self.status_label.setText("放大模型未安装，先在右侧点「下载模型」")
+            return
         verb, pending_word, running_word, done_word = MODE_NOUNS.get(self.mode, MODE_NOUNS["convert"])
         if total == 0:
             self.status_label.setText("拖入图片或文件夹，也可以按 Ctrl+O 添加")
@@ -829,7 +833,14 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setEnabled(False)
 
     # ------------------------------------------------------------- 放大 --
+    def _on_models_changed(self, _ready: bool) -> None:
+        self._sync_state()
+        self._refresh_idle_status()
+
     def start_upscale(self) -> None:
+        if not self.upscale_panel.is_ready():
+            self.toast.show_message("先下载放大模型（右侧卡片）", "warning", 2600)
+            return
         if self._is_busy() or not self.model.items:
             return
         targets = [item for item in self.model.items if item.status in ("idle", "failed", "done")]
@@ -933,7 +944,8 @@ class MainWindow(QMainWindow):
         ready = sum(1 for item in self.model.items if item.status in ("idle", "failed", "done"))
         verb = MODE_NOUNS.get(self.mode, MODE_NOUNS["convert"])[0]
         busy = self._is_busy()
-        self.start_btn.setEnabled(not busy and ready > 0)
+        models_ok = self.mode != "upscale" or self.upscale_panel.is_ready()
+        self.start_btn.setEnabled(not busy and ready > 0 and models_ok)
         self.start_btn.setText(f"开始{verb} · {ready}" if ready else f"开始{verb}")
         self.clear_btn.setEnabled(not busy and total > 0)
         self.progress.setVisible(busy or self.progress._value > 0)

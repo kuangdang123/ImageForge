@@ -38,6 +38,10 @@ __all__ = [
     "UpscaleCancelled",
     "weights_root",
     "ncnn_exe",
+    "models_ready",
+    "models_location_hint",
+    "default_models_root",
+    "set_models_root",
     "run_ncnn",
     "upscale_file",
     "run_batch",
@@ -111,15 +115,72 @@ class UpscaleCancelled(Exception):
 
 
 # --------------------------------------------------------------- 路径 --
-def weights_root() -> Path:
-    """权重根目录；PyInstaller onefile 下优先用解包目录。"""
-    local = Path(__file__).resolve().parent / "weights"
+#: 模型目录的文件夹名（放在 exe 旁边即为便携模式）。
+MODELS_DIRNAME = "models"
+
+_models_root_override: Path | None = None
+
+
+def set_models_root(path: str | Path | None) -> None:
+    """由 GUI / CLI 指定模型目录（None 表示恢复自动查找）。"""
+    global _models_root_override
+    _models_root_override = Path(path) if path else None
+
+
+def default_models_root() -> Path:
+    """用户可写的默认模型目录：%LOCALAPPDATA%\\ImageForge\\models。"""
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return Path(base) / "ImageForge" / MODELS_DIRNAME
+
+
+def _candidate_roots() -> list[Path]:
+    """按优先级列出候选模型根目录（每个都直接包含 ncnn/）。
+
+    显式指定（set_models_root / IMAGEFORGE_MODELS_DIR）时只认指定位置，
+    不再回退，便于用户明确控制模型装在哪里。
+    """
+    if _models_root_override:
+        return [_models_root_override]
+
+    env = os.environ.get("IMAGEFORGE_MODELS_DIR")
+    if env:
+        return [Path(env)]
+
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / MODELS_DIRNAME)
+    else:
+        # 源码运行：仓库内自带权重，开箱即用，优先于已安装的模型。
+        candidates.append(Path(__file__).resolve().parent / "weights")
+
+    candidates.append(default_models_root())
+
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        bundled = Path(meipass) / "imgforge" / "upscale" / "weights"
-        if bundled.is_dir():
-            return bundled
-    return local
+        candidates.append(Path(meipass) / "imgforge" / "upscale" / "weights")
+    return candidates
+
+
+def weights_root() -> Path:
+    """模型根目录（其下直接是 ncnn/）；找不到已安装的目录时返回首选安装位置。"""
+    candidates = _candidate_roots()
+    for root in candidates:
+        if (root / "ncnn").is_dir():
+            return root
+    return candidates[0]
+
+
+def models_ready() -> bool:
+    """模型是否已安装（ncnn exe 与至少一组权重齐全）。"""
+    root = weights_root()
+    if not (root / "ncnn" / "realcugan-ncnn-vulkan.exe").is_file():
+        return False
+    return any((root / "ncnn").glob("models-*/up*x-*.param"))
+
+
+def models_location_hint() -> str:
+    """给用户看的安装位置提示。"""
+    return str(weights_root())
 
 
 def ncnn_exe() -> Path:
@@ -153,6 +214,11 @@ def _weight_table(model_dir: str) -> dict[int, tuple[int, ...]]:
             denoise = int(match.group("noise"))
         table.setdefault(scale, set()).add(denoise)
     return {scale: tuple(sorted(levels)) for scale, levels in table.items()}
+
+
+def clear_model_cache() -> None:
+    """模型目录变化（下载/切换）后清掉可用性缓存。"""
+    _weight_table.cache_clear()
 
 
 def _available_scales(model: ModelSpec) -> tuple[int, ...]:

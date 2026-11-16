@@ -55,11 +55,12 @@ def build_app(argv: list[str]) -> QApplication:
     return app
 
 
-def _run_selftest() -> int:
+def _run_selftest(require_models: bool = False) -> int:
     """不打开界面的自检：确认超分权重可用并能真的推理一张小图。
 
     打包成 windowed exe 后没有控制台，所以结果同时写到
     ``%TEMP%\\ImageForge-selftest.txt`` 并以返回码表示成败（0 成功）。
+    模型按需下载的版本里，未安装模型不算失败（除非 ``require_models``）。
     """
     import tempfile
     import traceback
@@ -71,6 +72,16 @@ def _run_selftest() -> int:
     lines: list[str] = [f"ImageForge {__version__} self-test"]
     ok = True
     try:
+        models = upscale.models_ready()
+        lines.append(f"models: ready={models} root={upscale.models_location_hint()}")
+        if not models:
+            lines.append("提示: 未安装放大模型，可在界面「下载模型」，或运行 ImageForge.exe --install-models")
+            if require_models:
+                ok = False
+            lines.append("result: " + ("FAILED" if not ok else "OK (未安装模型)"))
+            _write_selftest(lines)
+            print("\n".join(lines))
+            return 0 if ok else 1
         exe = upscale.ncnn_exe()
         lines.append(f"ncnn exe: {exe} exists={exe.exists()}")
         ok = ok and exe.exists()
@@ -101,13 +112,36 @@ def _run_selftest() -> int:
         lines.append(traceback.format_exc())
         ok = False
     lines.append("result: " + ("OK" if ok else "FAILED"))
+    _write_selftest(lines)
+    print("\n".join(lines))
+    return 0 if ok else 1
+
+
+def _write_selftest(lines: list[str]) -> None:
+    import tempfile
+
     report = Path(tempfile.gettempdir()) / "ImageForge-selftest.txt"
     try:
         report.write_text("\n".join(lines) + "\n", encoding="utf-8")
     except OSError:
         pass
-    print("\n".join(lines))
-    return 0 if ok else 1
+
+
+def _run_install_models() -> int:
+    """无界面下载放大模型（供脚本/首启配置使用）。"""
+    from .. import upscale
+
+    try:
+        root = upscale.download_models(
+            progress=lambda done, total: print(
+                f"\r下载中 {done / 1048576:.1f}/{total / 1048576:.1f} MB", end="", flush=True
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - 命令行要给出可读错误
+        print(f"\n下载失败：{exc}")
+        return 1
+    print(f"\n模型已安装到 {root}")
+    return 0 if upscale.models_ready() else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -115,10 +149,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--theme", choices=["system", "light", "dark"], help="强制主题")
     parser.add_argument("--single", action="store_true", help="单实例（默认开启）")
     parser.add_argument("--check", action="store_true", help="自检超分权重并退出（不打开界面）")
+    parser.add_argument(
+        "--require-models",
+        action="store_true",
+        help="配合 --check：模型未安装时视为失败",
+    )
+    parser.add_argument(
+        "--install-models",
+        action="store_true",
+        help="下载放大模型后退出（无界面，约 44 MB）",
+    )
     args, qt_args = parser.parse_known_args(argv if argv is not None else sys.argv[1:])
 
+    if args.install_models:
+        return _run_install_models()
     if args.check:
-        return _run_selftest()
+        return _run_selftest(require_models=args.require_models)
 
     if not single_instance.acquire():
         single_instance.focus_existing()

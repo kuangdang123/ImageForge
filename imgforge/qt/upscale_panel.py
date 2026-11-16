@@ -6,11 +6,18 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+import os
+from pathlib import Path
+
+from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
+    QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
+    QPushButton,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
@@ -24,10 +31,11 @@ from .theme import Theme
 from .widgets import (
     Card,
     ChipGroup,
+    PillOptionBox,
     SectionHeader,
     SegmentedControl,
-    SelectBox,
     SwitchRow,
+    repolish,
 )
 
 FORMAT_OPTIONS = [
@@ -40,9 +48,56 @@ MODE_OPTIONS = [("scale", "按倍数"), ("target", "按目标尺寸")]
 DEVICE_OPTIONS = [("auto", "自动"), ("gpu", "GPU"), ("cpu", "CPU")]
 CUSTOM = "custom"
 
+#: 模型 tags -> 下拉框里的彩色短标签（文字, 角色）。
+TAG_PILLS: dict[str, tuple[str, str]] = {
+    "detail": ("画质", "warn"),
+    "anime": ("动漫", "accent"),
+    "slow": ("较慢", "muted"),
+    "balanced": ("均衡", "accent"),
+    "general": ("通用", "muted"),
+    "fast": ("最快", "success"),
+    "light": ("轻量", "muted"),
+}
+
+
+def model_pills(model) -> tuple[tuple[str, str], ...]:
+    return tuple(TAG_PILLS[tag] for tag in getattr(model, "tags", ()) if tag in TAG_PILLS)
+
+
+class ModelInstallWorker(QThread):
+    """后台下载模型包，避免卡住 UI。"""
+
+    progressChanged = Signal(int, int)
+    succeeded = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:  # noqa: D401 - QThread 入口
+        target = Path(os.environ.get("IMAGEFORGE_MODELS_DIR") or upscale.default_models_root())
+        try:
+            root = upscale.download_models(
+                target,
+                progress=lambda done, total: self.progressChanged.emit(done, total),
+                cancel=lambda: self._cancelled,
+            )
+            self.succeeded.emit(str(root))
+        except upscale.DownloadCancelled:
+            self.failed.emit("已取消下载")
+        except upscale.DownloadError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - 网络/解压任何异常都转成提示
+            self.failed.emit(f"下载失败：{exc}")
+
 
 class UpscalePanel(QWidget):
     changed = Signal()
+    modelsChanged = Signal(bool)
 
     def __init__(self, theme: Theme, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -51,6 +106,7 @@ class UpscalePanel(QWidget):
         self._building = True
         self._models = list(upscale.models_sorted())
         self._source_size: tuple[int, int] | None = None
+        self._install_worker: ModelInstallWorker | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -72,27 +128,86 @@ class UpscalePanel(QWidget):
         self.column.setSpacing(tokens.SPACE["sm"])
         scroll.setWidget(content)
 
-        self.column.addWidget(self._build_model_card())
-        self.column.addWidget(self._build_mode_card())
-        self.column.addWidget(self._build_detail_card())
-        self.column.addWidget(self._build_output_card())
+        self.install_card = self._build_install_card()
+        self.column.addWidget(self.install_card)
+        self.model_card = self._build_model_card()
+        self.mode_card = self._build_mode_card()
+        self.detail_card = self._build_detail_card()
+        self.output_card = self._build_output_card()
+        for card in (self.model_card, self.mode_card, self.detail_card, self.output_card):
+            self.column.addWidget(card)
         self.column.addStretch(1)
 
         self._load()
         self._rebuild_scale_options()
         self._rebuild_denoise_options()
         self._building = False
+        self._ready_state: bool | None = None
         self._sync_visibility()
+        self._sync_install_state()
 
     # ------------------------------------------------------------- 构建 --
+    def _build_install_card(self) -> Card:
+        card = Card(self.theme, padding=16, spacing=10)
+        header = SectionHeader(self.theme, "放大模型")
+        header.set_hint("按需下载")
+        card.body.addWidget(header)
+
+        self.install_text = QLabel(
+            f"第一次使用放大功能需要下载 Real-CUGAN 模型包（约 {upscale.MODELS_BYTES / 1024 / 1024:.0f} MB）。"
+            "下载一次即可，之后离线可用。"
+        )
+        self.install_text.setObjectName("Caption")
+        self.install_text.setWordWrap(True)
+        card.body.addWidget(self.install_text)
+
+        self.install_progress = QProgressBar()
+        self.install_progress.setObjectName("AppProgress")
+        self.install_progress.setRange(0, 100)
+        self.install_progress.setValue(0)
+        self.install_progress.setFixedHeight(6)
+        self.install_progress.setTextVisible(False)
+        self.install_progress.setVisible(False)
+        card.body.addWidget(self.install_progress)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(tokens.SPACE["sm"])
+        self.download_btn = QPushButton("下载模型")
+        self.download_btn.setProperty("variant", "primary")
+        self.download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.download_btn.clicked.connect(self._start_download)
+        self.install_file_btn = QPushButton("从文件安装…")
+        self.install_file_btn.setProperty("variant", "secondary")
+        self.install_file_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.install_file_btn.clicked.connect(self._install_from_file)
+        row.addWidget(self.download_btn)
+        row.addWidget(self.install_file_btn)
+        row.addStretch(1)
+        card.body.addLayout(row)
+
+        self.install_hint = QLabel("")
+        self.install_hint.setObjectName("Caption")
+        self.install_hint.setWordWrap(True)
+        card.body.addWidget(self.install_hint)
+        return card
+
     def _build_model_card(self) -> Card:
         card = Card(self.theme, padding=14, spacing=10)
         header = SectionHeader(self.theme, "模型")
         header.set_hint("按性能排序")
         card.body.addWidget(header)
 
-        options = [(model.id, model.name) for model in self._models]
-        self.model_box = SelectBox(self.theme, options, height=36)
+        options = [
+            {
+                "key": model.id,
+                "label": model.name,
+                "desc": model.description,
+                "pills": model_pills(model),
+            }
+            for model in self._models
+        ]
+        self.model_box = PillOptionBox(self.theme, options, height=38)
         self.model_box.valueChanged.connect(self._on_model_changed)
         card.body.addWidget(self.model_box)
 
@@ -336,6 +451,81 @@ class UpscalePanel(QWidget):
         s["upscale_tta"] = self.tta_row.value()
         s["upscale_format"] = self.format_group.value() or "keep"
 
+    # ------------------------------------------------------- 模型安装 --
+    def is_ready(self) -> bool:
+        return upscale.models_ready()
+
+    def _sync_install_state(self) -> None:
+        ready = self.is_ready()
+        self.install_card.setVisible(not ready)
+        for card in (self.model_card, self.mode_card, self.detail_card, self.output_card):
+            card.setVisible(ready)
+        if not ready:
+            self.install_hint.setText(f"安装位置：{upscale.models_location_hint()}")
+        if ready != self._ready_state:
+            self._ready_state = ready
+            self.modelsChanged.emit(ready)
+
+    def _start_download(self) -> None:
+        if self._install_worker is not None:
+            return
+        self.download_btn.setEnabled(False)
+        self.install_file_btn.setEnabled(False)
+        self.install_progress.setVisible(True)
+        self.install_progress.setValue(0)
+        self.install_hint.setText("正在连接…")
+        worker = ModelInstallWorker(self)
+        worker.progressChanged.connect(self._on_download_progress)
+        worker.succeeded.connect(self._on_download_done)
+        worker.failed.connect(self._on_download_failed)
+        self._install_worker = worker
+        worker.start()
+
+    def _on_download_progress(self, done: int, total: int) -> None:
+        total = total or upscale.MODELS_BYTES
+        self.install_progress.setValue(int(done / max(1, total) * 100))
+        self.install_hint.setText(f"正在下载 {done / 1048576:.1f} / {total / 1048576:.1f} MB")
+
+    def _on_download_done(self, root: str) -> None:
+        self._finish_install(f"模型已安装到 {root}")
+
+    def _on_download_failed(self, message: str) -> None:
+        self._install_worker = None
+        self.download_btn.setEnabled(True)
+        self.install_file_btn.setEnabled(True)
+        self.install_progress.setVisible(False)
+        self.install_hint.setText(message)
+
+    def _install_from_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "选择模型包", "", "Zip 压缩包 (*.zip)")
+        if not path:
+            return
+        QGuiApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            root = upscale.install_archive(Path(path))
+        except upscale.DownloadError as exc:
+            self.install_hint.setText(str(exc))
+            return
+        finally:
+            QGuiApplication.restoreOverrideCursor()
+        self._finish_install(f"模型已安装到 {root}")
+
+    def _finish_install(self, message: str) -> None:
+        self._install_worker = None
+        self.install_progress.setVisible(False)
+        self.download_btn.setEnabled(True)
+        self.install_file_btn.setEnabled(True)
+        self.install_hint.setText(message)
+        self._sync_install_state()
+        self._sync_visibility()
+        self.changed.emit()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self._install_worker is not None:
+            self._install_worker.cancel()
+            self._install_worker.wait(3000)
+        super().closeEvent(event)
+
     # ------------------------------------------------------------- 对外 --
     def set_enabled(self, enabled: bool) -> None:
         for widget in (
@@ -353,6 +543,7 @@ class UpscalePanel(QWidget):
         self.custom_h.setEnabled(enabled)
 
     def refresh(self) -> None:
+        self._sync_install_state()
         self._sync_visibility()
 
     def options(self) -> upscale.UpscaleOptions:

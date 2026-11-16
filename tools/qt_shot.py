@@ -105,6 +105,8 @@ def main() -> int:
     elif mode.startswith("upscale"):
         window.nav.set_value("upscale", emit=True)
         settle(0.3)
+        if not window.upscale_panel.is_ready():
+            out = ROOT / "tmp" / "shots" / f"qt_native_models_missing_{theme_name}.png"
         if mode == "upscale-done":
             window.clear_all()
             window.add_paths([SAMPLES / "tall.png"])

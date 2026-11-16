@@ -22,6 +22,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor,
+    QFont,
     QFontMetrics,
     QLinearGradient,
     QPainter,
@@ -39,6 +40,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QSizePolicy,
     QSlider,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -587,6 +591,8 @@ class SelectBox(QComboBox):
 
     def value(self) -> str:
         data = self.currentData()
+        if isinstance(data, dict):
+            return str(data.get("key", ""))
         return str(data) if data is not None else ""
 
     def set_value(self, value: str, *, emit: bool = False) -> None:
@@ -618,6 +624,281 @@ class SelectBox(QComboBox):
         x = self.width() - size - 12
         y = (self.height() - size) // 2
         painter.drawPixmap(x, y, pixmap)
+        painter.end()
+
+
+# ------------------------------------------------------- 彩色短标签 --
+#: 标签角色 -> (背景 token, 文字 token)
+PILL_ROLES: dict[str, tuple[str, str]] = {
+    "accent": ("accent_subtle", "accent_text"),
+    "success": ("success_subtle", "success"),
+    "warn": ("warning_subtle", "warning"),
+    "muted": ("surface_sunken", "text_secondary"),
+}
+_PILL_HEIGHT = 20
+_PILL_PAD = 8
+_PILL_GAP = 6
+
+
+def _pill_font(theme: Theme) -> QFont:
+    return theme.font("caption_medium")
+
+
+def _pills_width(theme: Theme, pills: Sequence[tuple[str, str]]) -> int:
+    if not pills:
+        return 0
+    fm = QFontMetrics(_pill_font(theme))
+    total = sum(fm.horizontalAdvance(text) + theme.px(_PILL_PAD * 2) for text, _role in pills)
+    return total + theme.px(_PILL_GAP) * (len(pills) - 1)
+
+
+def _draw_pills(
+    painter: QPainter,
+    theme: Theme,
+    pills: Sequence[tuple[str, str]],
+    x: float,
+    y_center: float,
+    *,
+    anchor_right: bool = False,
+    dim: bool = False,
+) -> None:
+    if not pills:
+        return
+    font = _pill_font(theme)
+    fm = QFontMetrics(font)
+    widths = [fm.horizontalAdvance(text) + theme.px(_PILL_PAD * 2) for text, _role in pills]
+    total = sum(widths) + theme.px(_PILL_GAP) * (len(pills) - 1)
+    cursor = x - total if anchor_right else x
+    height = theme.px(_PILL_HEIGHT)
+    painter.save()
+    for (text, role), width in zip(pills, widths):
+        bg_role, fg_role = PILL_ROLES.get(role, PILL_ROLES["muted"])
+        bg = theme.qcolor(bg_role)
+        fg = theme.qcolor(fg_role)
+        if dim:
+            bg.setAlpha(120)
+            fg.setAlpha(140)
+        rect = QRectF(cursor, y_center - height / 2, width, height)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(rect, height / 2, height / 2)
+        painter.setFont(font)
+        painter.setPen(fg)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        cursor += width + theme.px(_PILL_GAP)
+    painter.restore()
+
+
+class _PillDelegate(QStyledItemDelegate):
+    """弹出列表里的行：名称 + 副标题 + 右侧彩色短标签。"""
+
+    def __init__(self, theme: Theme, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.theme = theme
+
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:  # noqa: N802
+        data = index.data(Qt.ItemDataRole.UserRole) or {}
+        height = self.theme.px(54) if data.get("desc") else self.theme.px(42)
+        return QSize(option.rect.width(), height)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:  # noqa: N802
+        data = index.data(Qt.ItemDataRole.UserRole) or {}
+        theme = self.theme
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        outer = QRectF(option.rect)
+        painter.fillRect(option.rect, theme.qcolor("surface_raised"))
+        inner = outer.adjusted(theme.px(4), theme.px(2), -theme.px(4), -theme.px(2))
+        fill = theme.qcolor("surface_raised")
+        if option.state & QStyle.StateFlag.State_Selected:
+            fill = theme.qcolor("accent_subtle")
+        elif option.state & QStyle.StateFlag.State_MouseOver:
+            fill = theme.qcolor("surface_hover")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(inner, theme.radius("md"), theme.radius("md"))
+
+        left = inner.left() + theme.px(12)
+        right = inner.right() - theme.px(10)
+        label_font = theme.font("body_bold")
+        painter.setFont(label_font)
+        painter.setPen(theme.qcolor("text_primary"))
+        fm = QFontMetrics(label_font)
+        pills_w = _pills_width(theme, data.get("pills") or ())
+        text_w = int(right - left - pills_w - theme.px(10))
+        label_rect = QRectF(left, inner.top() + (theme.px(8) if data.get("desc") else 0), text_w, fm.height())
+        painter.drawText(label_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, fm.elidedText(data.get("label", ""), Qt.TextElideMode.ElideRight, max(10, int(text_w))))
+
+        if data.get("desc"):
+            desc_font = theme.font("caption")
+            painter.setFont(desc_font)
+            painter.setPen(theme.qcolor("text_secondary"))
+            dfm = QFontMetrics(desc_font)
+            painter.drawText(
+                QRectF(left, label_rect.bottom() + theme.px(2), right - left, dfm.height()),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                dfm.elidedText(data["desc"], Qt.TextElideMode.ElideRight, max(10, int(right - left))),
+            )
+
+        y_center = inner.center().y()
+        if data.get("desc"):
+            y_center = label_rect.center().y()
+        _draw_pills(painter, theme, data.get("pills") or (), right, y_center, anchor_right=True)
+        painter.restore()
+
+
+class PillOptionBox(QComboBox):
+    """下拉框：每项 = 名称 +（弹出时）说明 + 右侧彩色短标签胶囊。
+
+    用于「模型」这类选项少、但每个选项都带取舍信息的场景：
+    名称给出选择，彩色标签（画质 / 均衡 / 最快 / 动漫）一眼说明怎么挑。
+    """
+
+    valueChanged = Signal(str)
+
+    def __init__(
+        self,
+        theme: Theme,
+        options: Iterable[dict] = (),
+        parent: QWidget | None = None,
+        *,
+        height: int = 38,
+    ) -> None:
+        super().__init__(parent)
+        self.theme = theme
+        self._options: list[dict] = []
+        self._hover = False
+        self.setObjectName("PillSelectBox")
+        self.setFont(theme.font("body"))
+        self.setFixedHeight(height)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setItemDelegate(_PillDelegate(theme, self))
+        self.set_options(options)
+        self.currentIndexChanged.connect(self._on_index_changed)
+        theme.changed.connect(self.update)
+
+    # ------------------------------------------------------------- 数据 --
+    def set_options(self, options: Iterable[dict], *, keep_value: bool = True) -> None:
+        current = self.value() if keep_value else ""
+        blocked = self.blockSignals(True)
+        self.clear()
+        self._options = []
+        for option in options:
+            item = {
+                "key": str(option.get("key", option.get("label", ""))),
+                "label": str(option.get("label", "")),
+                "desc": str(option.get("desc") or ""),
+                "pills": tuple(option.get("pills") or ()),
+            }
+            self._options.append(item)
+            self.addItem(item["label"], item["key"])
+            self.setItemData(self.count() - 1, item, Qt.ItemDataRole.UserRole)
+        self.blockSignals(blocked)
+        keys = [item["key"] for item in self._options]
+        if current and current in keys:
+            self.set_value(current)
+        elif keys:
+            self.setCurrentIndex(0)
+        self.update()
+
+    def option(self, key: str | None = None) -> dict:
+        target = key if key is not None else self.value()
+        for item in self._options:
+            if item["key"] == target:
+                return item
+        return {}
+
+    def options(self) -> list[dict]:
+        return list(self._options)
+
+    def value(self) -> str:
+        data = self.currentData()
+        if isinstance(data, dict):
+            return str(data.get("key", ""))
+        return str(data) if data is not None else ""
+
+    def set_value(self, value: str, *, emit: bool = False) -> None:
+        target = str(value)
+        for index, item in enumerate(self._options):
+            if item["key"] == target:
+                blocked = self.signalsBlocked()
+                self.blockSignals(True)
+                self.setCurrentIndex(index)
+                self.blockSignals(blocked)
+                self.update()
+                if emit and blocked is False:
+                    self.valueChanged.emit(target)
+                return
+
+    def _on_index_changed(self, _index: int) -> None:
+        if self.signalsBlocked() or not self._options:
+            return
+        self.update()
+        self.valueChanged.emit(self.value())
+
+    # ------------------------------------------------------------- 绘制 --
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        theme = self.theme
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = theme.radius("md")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(theme.qcolor("surface_raised"))
+        painter.drawRoundedRect(rect, radius, radius)
+
+        if self.hasFocus():
+            border, width = theme.qcolor("focus"), 2.0
+        elif self._hover and self.isEnabled():
+            border, width = theme.qcolor("border_strong"), 1.0
+        else:
+            border, width = theme.qcolor("border"), 1.0
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(border, width))
+        painter.drawRoundedRect(rect, radius, radius)
+
+        item = self.option()
+        label_font = theme.font("body_bold") if self.isEnabled() else theme.font("body")
+        fm = QFontMetrics(label_font)
+        left = theme.px(12)
+        chevron_zone = theme.px(34)
+        pills = item.get("pills") or ()
+        pills_w = _pills_width(theme, pills)
+        text_room = int(self.width() - left - pills_w - chevron_zone - theme.px(10))
+        painter.setFont(label_font)
+        painter.setPen(theme.qcolor("text_primary" if self.isEnabled() else "text_disabled"))
+        painter.drawText(
+            QRectF(left, 0, max(10, text_room), self.height()),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            fm.elidedText(item.get("label", ""), Qt.TextElideMode.ElideRight, max(10, text_room)),
+        )
+
+        if pills:
+            _draw_pills(
+                painter,
+                theme,
+                pills,
+                self.width() - chevron_zone - theme.px(6),
+                self.height() / 2,
+                anchor_right=True,
+                dim=not self.isEnabled(),
+            )
+
+        size = 16
+        dpr = float(self.devicePixelRatioF() or 1.0)
+        icon = theme.icon("chevron_down", "text_disabled")
+        pixmap = icon.pixmap(QSize(size, size), dpr)
+        painter.drawPixmap(self.width() - size - theme.px(12), (self.height() - size) // 2, pixmap)
         painter.end()
 
 

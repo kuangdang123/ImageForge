@@ -78,6 +78,13 @@ class Theme(QObject):
     def space(self, name: str) -> int:
         return tokens.SPACE[name]
 
+    def px(self, value: float) -> int:
+        """Qt 自己处理 DPI，这里的“逻辑像素”就是设备无关的整数像素。
+
+        保留这个方法是为了让自绘控件里的尺寸表达式读起来和旧 Tk 版一致。
+        """
+        return int(round(value))
+
     def radius(self, name: str) -> int:
         return tokens.RADIUS[name]
 
