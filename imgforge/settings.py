@@ -39,6 +39,18 @@ DEFAULTS: Dict[str, Any] = {
     "theme": "light",
     "window": "1080x600",
     "last_dir": "",
+    "mode": "convert",            # convert | upscale
+    # 分辨率放大（Real-CUGAN ncnn）
+    "upscale_model": "cugan-pro",
+    "upscale_device": "auto",     # auto | gpu | cpu
+    "upscale_mode": "scale",      # scale | target
+    "upscale_scale": 2,
+    "upscale_preset": "1080p",
+    "upscale_custom_w": 1920,
+    "upscale_custom_h": 1080,
+    "upscale_denoise": None,      # None = 用模型默认档
+    "upscale_tta": False,
+    "upscale_format": "keep",
 }
 
 

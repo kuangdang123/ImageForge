@@ -37,6 +37,12 @@ def main() -> int:
     if "--convert" in args:
         mode = "convert"
         out = ROOT / "tmp" / "shots" / f"qt_native_convert_{theme_name}.png"
+    if "--upscale" in args:
+        mode = "upscale"
+        out = ROOT / "tmp" / "shots" / f"qt_native_upscale_{theme_name}.png"
+    if "--upscale-done" in args:
+        mode = "upscale-done"
+        out = ROOT / "tmp" / "shots" / f"qt_native_upscale_done_{theme_name}.png"
     out = out if out.is_absolute() else ROOT / out
     out.parent.mkdir(parents=True, exist_ok=True)
     settings_file = Path(os.environ["IMAGEFORGE_HOME"]) / "settings.json"
@@ -95,6 +101,30 @@ def main() -> int:
             app.processEvents()
             time.sleep(0.01)
         settle(0.6)
+        window.grab().save(str(out))
+    elif mode.startswith("upscale"):
+        window.nav.set_value("upscale", emit=True)
+        settle(0.3)
+        if mode == "upscale-done":
+            window.clear_all()
+            window.add_paths([SAMPLES / "tall.png"])
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and window._pending_probe:
+                app.processEvents()
+                time.sleep(0.01)
+            tout = ROOT / "tmp" / "shot_out"
+            tout.mkdir(parents=True, exist_ok=True)
+            window.settings["out_mode"] = "folder"
+            window.settings["out_dir"] = str(tout)
+            window.upscale_panel.device.set_value("cpu", emit=True)
+            window.upscale_panel.model_group.set_value("cugan-se", emit=True)
+            settle(0.2)
+            window.start_upscale()
+            deadline = time.monotonic() + 180
+            while time.monotonic() < deadline and window._upscale_worker is not None:
+                app.processEvents()
+                time.sleep(0.02)
+            settle(0.8)
         window.grab().save(str(out))
     elif mode == "preview":
         from imgforge.qt.preview import PreviewDialog

@@ -1,18 +1,22 @@
-# ImageForge 2.0.1
+# ImageForge 2.1.0
 
-把 PNG / JPG / WebP / BMP / GIF / TIFF / AVIF 互转，并且一键生成**多尺寸 Windows 图标**的桌面小工具。
+把 PNG / JPG / WebP / BMP / GIF / TIFF / AVIF 互转、一键生成**多尺寸 Windows 图标**，还能把图片**无损放大 2–4 倍**或用 Real-CUGAN 超分到 1080p / 2K / 4K / 8K 的桌面小工具。
 
-界面用 PySide6（Qt 6）重写：原生控件、明暗两套主题、1.5× 高 DPI 下依然锐利；所有偏好（格式、尺寸、质量、主题、窗口大小）下次启动自动恢复。
-转换全部在本机完成，不依赖浏览器、不上传文件、不需要联网。
+界面用 PySide6（Qt 6）编写：原生控件、明暗两套主题、1.5× 高 DPI 下依然锐利；顶部导航切换「格式转换」与「分辨率放大」，两页共用同一个待处理队列。所有偏好（模式、格式、尺寸、质量、模型、主题、窗口大小）下次启动自动恢复。
+所有处理都在本机完成，不依赖浏览器、不上传文件、不需要联网。
 
 **[下载发布版](https://github.com/kuangdang123/ImageForge/releases/latest)** —— 单个 `ImageForge.exe`，不需要装 Python。
 
 ![浅色主题](docs/screenshots/qt-light.png)
 
 <details>
-<summary>深色主题、挑图窗口、预览窗口、转换完成（点击展开）</summary>
+<summary>深色主题、分辨率放大、转换完成、挑图窗口、预览窗口（点击展开）</summary>
 
 ![深色主题](docs/screenshots/qt-dark.png)
+
+![分辨率放大](docs/screenshots/qt-upscale-light.png)
+
+![放大完成](docs/screenshots/qt-upscale-done.png)
 
 ![从文件夹挑图](docs/screenshots/qt-picker.png)
 
@@ -26,10 +30,11 @@
 
 - **多尺寸 ICO**：一次输出 16 / 24 / 32 / 48 / 64 / 128 / 256 七档，每档独立重采样，不是把一张大图塞进去。
 - **常用格式互转**：PNG、JPG、WebP、BMP、GIF、TIFF、AVIF 任意方向。
+- **分辨率放大**：Real-CUGAN（ncnn/Vulkan）三档模型按性能排序，支持按倍数（2–4×）或按目标尺寸（720p / 1080p / 2K / 4K / 8K / 自定义）放大；设备默认 `自动`（优先 GPU，不可用时回退 CPU），针对动漫 / 二次元 / 游戏立绘做了调优。
 - **文件夹里挑图**：「选择文件夹…」打开图片列表，搜索、全选、Shift 连选，只把想要的几张加进队列。
 - **批处理**：拖入文件或文件夹、粘贴剪贴板图片、递归扫描子目录、保留目录结构。
-- **可控输出**：有损质量滑杆、WebP 无损、保留 EXIF / ICC、文件名后缀、输出到源文件旁边或指定文件夹。
-- **不覆盖原图**：输出与源文件同名时自动改名，重名自动加 ` (2)`。
+- **可控输出**：有损质量滑杆、WebP 无损、保留 EXIF / ICC、文件名后缀、输出到源文件旁边或指定文件夹；放大页还能选择保持原格式或另存 PNG / JPG / WebP。
+- **不覆盖原图**：输出与源文件同名时自动改名，重名自动加 ` (2)`；放大产物默认带 `_upscaled`，绝不碰源文件。
 - **预览**：大图查看 + 透明棋盘格 + 元信息；输出 ICO 时还能看到每一档尺寸真实渲染出来的样子。
 - **明暗主题**、窗口大小、上次使用的目录都会记住；重复启动只会开一个窗口。
 
@@ -37,7 +42,7 @@
 
 ### 方式一：下载现成的 exe（不需要 Python）
 
-从 [Releases](https://github.com/kuangdang123/ImageForge/releases/latest) 下载 `ImageForge.exe`（约 52 MB），放到任意文件夹双击即可。单文件、免安装，第一次启动会先解压到临时目录，慢一两秒。
+从 [Releases](https://github.com/kuangdang123/ImageForge/releases/latest) 下载 `ImageForge.exe`（约 100 MB，含超分权重），放到任意文件夹双击即可。单文件、免安装，第一次启动会先解压到临时目录，慢一两秒。
 
 重复双击不会再开第二个窗口，而是把已经开着的窗口提到前面来。
 
@@ -70,7 +75,7 @@ pip install -r requirements.txt
 1. 拖入图片，或用工具栏添加 / `Ctrl+V` 粘贴；
 2. 在右侧选输出格式。选 **ICO** 时还会出现尺寸、非正方形处理、像素数据三组选项；
 3. 选保存位置（源文件旁 / 指定文件夹）；
-4. `Ctrl+Enter` 或点「开始转换」。
+4. `Ctrl+Enter` 或点底栏的「开始转换 / 开始放大」。
 
 ### 从文件夹里挑图
 
@@ -92,12 +97,34 @@ pip install -r requirements.txt
 | `Ctrl+Shift+O` | 打开文件夹挑图（多选） |
 | `Ctrl+V` | 粘贴剪贴板里的图片或文件路径 |
 | `Delete` | 从列表移除选中项 |
-| `Ctrl+Enter` | 开始转换 |
+| `Ctrl+Enter` | 开始处理（转换或放大） |
 | `Enter` | 预览选中项 |
 | `Esc` | 取消转换 |
 | `↑` / `↓` | 在列表里移动 |
 
 挑图窗口里另有一套键：`↑` `↓` 移动、`空格` 勾选、`Ctrl+A` 全选、`Enter` 添加、`Ctrl+Enter` 添加并转换、`Esc` 关闭。
+
+## 分辨率放大
+
+顶部导航切到「分辨率放大」，右侧就变成放大设置；队列、拖拽、挑图、快捷键与转换页完全一样，只是「开始转换」变成「开始放大」。
+
+![分辨率放大页](docs/screenshots/qt-upscale-light.png)
+
+- **模型**：按性能从强到弱排列。
+  - `Real-CUGAN Pro`：细节最强，支持 2× / 3×，动漫、游戏立绘首选，速度最慢；
+  - `Real-CUGAN SE`：均衡，支持 2× / 3× / 4×，通用性最好；
+  - `Real-CUGAN NoSE`：最轻快，只做 2×，适合批量快速处理。
+- **设备**：默认 `自动`，优先用 GPU（Vulkan），显卡不可用时自动回退 CPU；也可以手动锁定 `GPU` / `CPU`。
+- **两种放大方式**（互相独立，不是同一件事）：
+  - `按倍数`：2× / 3×（SE 还有 4×）；先由模型放大，再按需微调到精确尺寸；
+  - `按目标尺寸`：720p / 1080p / 2K / 4K / 8K 或自定义宽高；程序按比例把最长边缩放到目标框内，**不会拉伸变形**。
+- **降噪**：档位随「模型 + 倍率」变化（保守 / 不降噪 / 轻度 / 中度 / 强降噪），不可用的组合会自动落在最接近的档位，不会崩溃。
+- **TTA 增强**：质量略好、速度约慢一倍。
+- **输出**：默认保持原格式，也可以统一另存为 PNG / JPG / WebP；默认文件名追加 `_upscaled`，不覆盖原图。
+
+放大完成后，队列行会显示输出尺寸与体积，例如 `400×1040 · 50.5 KB`，路径在「打开输出目录」里。动画图只取第一帧；带透明通道的 PNG 在 CPU 模式下会单独放大 alpha 通道再合并，不会丢透明。
+
+> 速度参考（本机 i5 + 核显）：`200×520` 的 PNG 在 CPU 上 2× 约 6–10 秒，`800×600` 照片约 20–45 秒；GPU 会快很多。放大是计算密集型任务，批量时请耐心等待，右下角进度条会逐张推进。
 
 ## 命令行
 
@@ -179,7 +206,7 @@ Windows 图标不是「一张 256×256 的 PNG」那么简单：任务栏、标�
 
 ## 设置保存在哪
 
-`%APPDATA%\ImageForge\settings.json` —— 主题、上次的输出格式、质量、ICO 选项、窗口大小、上次目录等。删掉它就恢复默认。
+`%APPDATA%\ImageForge\settings.json` —— 当前页（转换 / 放大）、主题、输出格式、质量、ICO 选项、放大模型 / 设备 / 倍率 / 目标尺寸 / 降噪、窗口大小、上次目录等。删掉它就恢复默认。
 
 转换产物不会写进程序目录，只有你指定的输出路径。
 
@@ -196,13 +223,19 @@ ImageForge/
 │  │  ├─ app.py              QApplication、主题、单实例
 │  │  ├─ mainwindow.py       主窗口：命令栏 / 队列 / 设置 / 底栏
 │  │  ├─ queueview.py        文件队列模型、委托、拖放
-│  │  ├─ settings_panel.py   输出设置面板
+│  │  ├─ settings_panel.py   格式转换的输出设置面板
+│  │  ├─ upscale_panel.py    分辨率放大的设置面板（模型 / 设备 / 倍数 / 预设 / 降噪）
 │  │  ├─ preview.py          预览窗口与 ICO 尺寸条
 │  │  ├─ picker.py           从文件夹挑图
 │  │  ├─ tokens.py           颜色 / 间距 / 字号 token
 │  │  ├─ theme.py            主题、QSS、明暗切换
 │  │  ├─ widgets.py          卡片、胶囊、分段选择、开关、Toast…
 │  │  └─ icons.py            矢量图标
+│  ├─ upscale/               分辨率放大
+│  │  ├─ catalog.py          Real-CUGAN 模型目录（性能排序、倍率、降噪档位）
+│  │  ├─ targets.py          目标尺寸预设与缩放计算
+│  │  ├─ engine.py           ncnn 子进程推理、透明通道、错误翻译
+│  │  └─ weights/ncnn/       realcugan-ncnn-vulkan.exe 与三套模型权重
 │  ├─ converter.py           格式表、单文件转换、批量任务
 │  ├─ ico.py                 ICO 渲染与容器编码
 │  ├─ settings.py            设置读写
@@ -213,13 +246,14 @@ ImageForge/
 │  ├─ gui.py / widgets.py / theme.py / picker.py   1.x tkinter 界面
 │  └─ assets/                应用图标与 logo
 ├─ samples/                  示例图片
-├─ tests/                    42 个单元测试（格式转换 + 挑图 + 单实例 + 设置持久化）
+├─ tests/                    80 个单元测试（格式转换 + 挑图 + 单实例 + 设置 + 超分）
 ├─ tools/
 │  ├─ make_icon.py           从 assets/logo.png 重新生成 assets/app.ico
 │  ├─ check_contrast.py      色板对比度校验
 │  ├─ build_exe.py           PyInstaller 打包（默认 Qt 版，--legacy-tk 打 1.x）
 │  ├─ entry_qt.py / entry_gui.py        exe 入口脚本
 │  ├─ qt_smoke.py            离屏冒烟：添加 → 转换 → 预览 → 挑图
+│  ├─ qt_upscale_smoke.py    离屏冒烟：添加 → 切到放大页 → 真实推理一张
 │  ├─ qt_shot.py             真实平台界面截图
 │  ├─ shot_window.py         按标题截取任意窗口（含打包后的 exe）
 │  ├─ gui_smoke.py / picker_smoke.py   1.x 界面冒烟
@@ -230,24 +264,34 @@ ImageForge/
 ## 开发
 
 ```powershell
-python -m unittest discover -s tests          # 42 个测试
+python -m unittest discover -s tests          # 80 个测试
 python tools/make_icon.py                     # 从 assets/logo.png 生成多尺寸 app.ico
 python tools/check_contrast.py                # 明暗两套色板 WCAG 校验
 python tools/qt_smoke.py                      # 离屏跑完整流程
 python tools/qt_settings_smoke.py             # 设置改动 → 关窗 → 重新加载是否保留
-python tools/qt_shot.py light tmp\a.png       # 真实窗口截图（dark / --picker / --preview / --convert）
-python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 52 MB）
+python tools/qt_upscale_smoke.py              # 离屏冒烟：放大页 + 真实推理
+python tools/qt_shot.py light tmp\a.png       # 真实窗口截图（dark / --picker / --preview / --convert / --upscale）
+python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 100 MB，含超分权重）
 ```
 
 开发脚本把配置写到 `tmp/settings/`（通过 `IMAGEFORGE_HOME` 环境变量重定向），不会动 `%APPDATA%` 里的真实配置。
 
 ## 更新日志
 
+### 2.1.0
+
+- 新增「分辨率放大」页：顶部导航在「格式转换 / 分辨率放大」之间切换，两页共用同一个待处理队列、拖拽、挑图与快捷键。
+- 集成 Real-CUGAN（ncnn/Vulkan）超分：`Pro` / `SE` / `NoSE` 三档模型按性能排序，支持 2× / 3× / 4× 与 720p / 1080p / 2K / 4K / 8K / 自定义目标尺寸两种放大方式。
+- 设备默认 `自动`（优先 GPU，失败回退 CPU），也可手动指定 GPU / CPU；降噪档位按「模型 + 倍率」自动取可用值。
+- 超分引擎单独成包 `imgforge/upscale/`，不依赖 torch / numpy / OpenCV；CPU 模式自动处理透明通道，崩溃组合会自动回退并给出中文提示。
+- 新增 38 个超分单元测试（含真实 CPU 推理冒烟）与 `tools/qt_upscale_smoke.py`，测试总数 80。
+- exe 体积从 52 MB 增至约 100 MB（51 MB 为模型权重），版本号 2.1.0。
+
 ### 2.0.1
 
 - 设置面板的改动（格式、尺寸、质量、ICO 细节、其它开关）现在会在 350 ms 去抖后立即落盘，关窗时再存一次；不再依赖“正常退出才会写文件”。
 - 版本号改为由 `imgforge/version.py` 统一提供，界面徽标、exe 属性、打包脚本共用同一个值。
-- 新增 7 个设置读写单元测试与 `tools/qt_settings_smoke.py`（改设置 → 关窗 → 重启校验），共 42 个测试。
+- 新增 7 个设置读写单元测试与 `tools/qt_settings_smoke.py`（改设置 → 关窗 → 重启校验）。
 
 ### 2.0.0
 
@@ -275,10 +319,20 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 
 **挑图时有些行是灰的、右边写着「已在列表」？** 这些图已经在待处理队列里了，重复勾选不会重复添加。
 
+**放大很慢，正常吗？** 正常。超分是逐像素推理，CPU 上 `800×600` 的照片大约 20–45 秒，`200×520` 的插画约 6–10 秒；用 GPU（Vulkan）会快很多。批量处理时进度条会逐张推进。
+
+**提示「CPU 模式不可用，已改用 GPU」？** 说明当前模型/图片组合在 CPU 上推理失败，程序自动改用 GPU 重试，结果不受影响；这条只是一行提示。
+
+**三个模型怎么选？** 画质优先选 `Pro`（2× / 3×，细节最强）；需要 4× 或通用场景选 `SE`；只想快速放大一批、对细节要求不高选 `NoSE`（只支持 2×）。
+
+**放大后透明背景会不会变黑？** 不会。带 alpha 的 PNG 在 CPU 模式下会把透明通道单独放大再合并，输出仍是透明 PNG（输出格式选 PNG / WebP 时）。
+
+**放大后的文件在哪？** 与转换页一致：默认放源文件旁边，也可以在「保存到」里指定文件夹；文件名默认追加 `_upscaled`，永远不会覆盖原图。
+
 **设置会保存吗？** 会。输出格式、质量、ICO 尺寸与细节、其它开关、主题、窗口大小、上次目录都写在 `%APPDATA%\ImageForge\settings.json`，下次启动自动恢复；改完 0.35 秒就在后台落盘，即使直接关进程也不会丢。
 
 **动图不动了？** 只有 WebP 和 GIF 作为输出格式才支持动图，其它格式只取第一帧。
 
 **为什么 AVIF 慢？** 编码本身计算量大，批量时耐心等一下；急着用可以先转 WebP。
 
-**打包后的 exe 是 52 MB？** PySide6 自带的 Qt 运行库体积就在这里；已经排除了 WebEngine、QML、3D 等用不到的大模块。1.x 的 tkinter 版本只有 23 MB。
+**打包后的 exe 怎么快 100 MB 了？** 其中约 52 MB 是 PySide6 的 Qt 运行库（已排除 WebEngine、QML、3D 等模块），另外 51 MB 是 Real-CUGAN 的 ncnn 模型权重与推理程序；1.x 的 tkinter 版本只有 23 MB。

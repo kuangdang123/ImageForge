@@ -58,7 +58,7 @@ ROW_HEIGHT = 60
 STATUS_TEXT = {
     "reading": "读取中",
     "idle": "就绪",
-    "running": "转换中",
+    "running": "处理中",
     "done": "完成",
     "failed": "失败",
     "skipped": "已跳过",
@@ -70,7 +70,7 @@ class QueueItem:
     path: Path
     status: str = "reading"
     info: converter.ImageInfo | None = None
-    result: converter.ConvertResult | None = None
+    result: object | None = None
     thumb: QPixmap | None = None
     message: str = ""
     detail: str = ""
@@ -94,16 +94,22 @@ class QueueItem:
             return ""
         if not self.result.ok:
             return self.result.message or "失败"
-        spec = converter.FORMATS[self.result.dest.suffix.lstrip(".").lower()] if self.result.dest else None
+        dest = getattr(self.result, "dest", None)
+        size = getattr(self.result, "bytes", 0)
+        if not size and dest is not None and dest.exists():
+            size = dest.stat().st_size
+        if hasattr(self.result, "model_scale"):  # 超分结果
+            return f"{self.result.width}×{self.result.height} · {converter.human_size(size)}"
+        spec = converter.FORMATS[dest.suffix.lstrip(".").lower()] if dest else None
         label = spec.label if spec else ""
-        if spec is not None and spec.key == "ico" and self.result.dest is not None:
+        if spec is not None and spec.key == "ico" and dest is not None:
             try:
-                count = len(ico.read_entries(self.result.dest))
+                count = len(ico.read_entries(dest))
             except Exception:
                 count = 0
             if count:
-                return f"{count} 个尺寸 · {converter.human_size(self.result.bytes)}"
-        return f"{label} · {converter.human_size(self.result.bytes)}"
+                return f"{count} 个尺寸 · {converter.human_size(size)}"
+        return f"{label} · {converter.human_size(size)}"
 
 
 class FileModel(QAbstractListModel):
@@ -190,7 +196,7 @@ class FileModel(QAbstractListModel):
         index = self.index(row, 0)
         self.dataChanged.emit(index, index, [ITEM_ROLE])
 
-    def set_result(self, row: int, result: converter.ConvertResult) -> None:
+    def set_result(self, row: int, result: object) -> None:
         item = self.item(row)
         if item is None:
             return
@@ -531,6 +537,7 @@ class FilePanel(QWidget):
         header.addWidget(title)
         header.addWidget(self.count_label)
         header.addStretch(1)
+        self._hint_text = "双击预览 · Delete 移除"
         self.hint_label = QLabel("")
         self.hint_label.setObjectName("Caption")
         header.addWidget(self.hint_label)
@@ -553,6 +560,11 @@ class FilePanel(QWidget):
     def show_empty(self) -> None:
         self.stack.setCurrentIndex(0)
 
+    def set_hint(self, text: str) -> None:
+        self._hint_text = text
+        if self.list.isVisible():
+            self.hint_label.setText(text)
+
     def set_counts(self, total: int, done: int, failed: int) -> None:
         if total == 0:
             self.count_label.setText("")
@@ -564,4 +576,4 @@ class FilePanel(QWidget):
         if failed:
             text += f" · 失败 {failed}"
         self.count_label.setText(text)
-        self.hint_label.setText("双击预览 · Delete 移除" if total else "")
+        self.hint_label.setText(self._hint_text if total else "")

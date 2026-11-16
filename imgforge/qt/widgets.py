@@ -214,6 +214,7 @@ class ChipGroup(QWidget):
         super().__init__(parent)
         self.theme = theme
         self._columns = columns
+        self._compact = compact
         self._buttons: dict[str, Chip] = {}
         self._value = ""
         self._group = QButtonGroup(self)
@@ -258,6 +259,25 @@ class ChipGroup(QWidget):
 
     def buttons(self) -> dict[str, Chip]:
         return dict(self._buttons)
+
+    def set_options(self, options: Sequence[tuple[str, str]], *, keep_value: bool = True) -> None:
+        """重建选项（模型/降噪档位这类会随选择变化的组）。"""
+        previous = self._value if keep_value else ""
+        for chip in list(self._buttons.values()):
+            self._group.removeButton(chip)
+            self._grid.removeWidget(chip)
+            chip.setParent(None)
+            chip.deleteLater()
+        self._buttons.clear()
+        self._value = ""
+        for index, (key, label) in enumerate(options):
+            chip = Chip(self.theme, label, compact=self._compact)
+            chip.clicked.connect(lambda _checked=False, k=key: self._on_clicked(k))
+            self._group.addButton(chip)
+            self._buttons[key] = chip
+            self._grid.addWidget(chip, index // self._columns, index % self._columns)
+        if previous in self._buttons:
+            self.set_value(previous)
 
 
 class ToggleChip(QAbstractButton):

@@ -119,6 +119,10 @@ def main() -> int:
     excludes = COMMON_EXCLUDES + ([] if legacy else QT_EXCLUDES)
     if legacy:
         args.extend(["--collect-all", "tkinterdnd2"])
+    else:
+        weights = ROOT / "imgforge" / "upscale" / "weights"
+        if weights.is_dir():
+            args.extend(["--add-data", f"{weights}{';'}imgforge/upscale/weights"])
     for name in excludes:
         args.extend(["--exclude-module", name])
     args.append(str(ROOT / "tools" / entry))

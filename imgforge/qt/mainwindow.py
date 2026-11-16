@@ -22,12 +22,13 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from .. import converter, ico
+from .. import converter, ico, upscale
 from ..settings import Settings
 from ..version import __version__
 from . import icons
@@ -35,11 +36,14 @@ from .preview import PreviewDialog
 from .queueview import FileModel, FilePanel, QueueItem, THUMB_SIZE
 from .settings_panel import SettingsPanel
 from .theme import Theme
+from .upscale_panel import UpscalePanel
 from .widgets import ElidedLabel, MiniProgress, SegmentedControl, Toast
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 OUT_MODE_OPTIONS = [("same", "源文件旁"), ("folder", "指定文件夹")]
+MODE_OPTIONS = [("convert", "格式转换"), ("upscale", "分辨率放大")]
+MODE_NOUNS = {"convert": ("转换", "待转换", "转换中", "已转换"), "upscale": ("放大", "待放大", "放大中", "已放大")}
 THEME_CYCLE = ["system", "light", "dark"]
 THEME_LABELS = {"system": "跟随系统", "light": "浅色", "dark": "深色"}
 THEME_ICONS = {"system": "monitor", "light": "sun", "dark": "moon"}
@@ -135,6 +139,57 @@ class ConversionWorker(QThread):
         self.finished_batch.emit(results, self._cancelled)
 
 
+class UpscaleWorker(QThread):
+    """Real-CUGAN 批处理线程：逐张放大，进度/结果通过信号回主线程。"""
+
+    progressed = Signal(int, int, str)
+    resulted = Signal(object)
+    finished_batch = Signal(list, bool)
+
+    def __init__(
+        self,
+        paths: list[Path],
+        options: upscale.UpscaleOptions,
+        out_root: Path | None,
+        keep_tree: bool,
+        base_dir: Path | None,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.paths = paths
+        self.options = options
+        self.out_root = out_root
+        self.keep_tree = keep_tree
+        self.base_dir = base_dir
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:  # noqa: D401
+        results: list[upscale.UpscaleResult] = []
+        total = len(self.paths)
+
+        def on_result(index: int, result: upscale.UpscaleResult) -> None:
+            results.append(result)
+            self.resulted.emit(result)
+            self.progressed.emit(index + 1, total, result.src.name)
+
+        try:
+            upscale.run_batch(
+                self.paths,
+                self.options,
+                self.out_root,
+                keep_tree=self.keep_tree,
+                base_dir=self.base_dir,
+                on_result=on_result,
+                should_cancel=lambda: self._cancelled,
+            )
+        except Exception as exc:  # noqa: BLE001 - 兜底，避免线程静默死亡
+            results.append(upscale.UpscaleResult(src=self.paths[0] if self.paths else Path(""), message=f"内部错误：{exc}"))
+        self.finished_batch.emit(results, self._cancelled)
+
+
 # ------------------------------------------------------------------- 主窗 --
 class MainWindow(QMainWindow):
     def __init__(self, theme: Theme, settings: Settings) -> None:
@@ -143,6 +198,8 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.model = FileModel(theme, self)
         self._worker: ConversionWorker | None = None
+        self._upscale_worker: UpscaleWorker | None = None
+        self.mode = str(settings["mode"] or "convert")
         self._probe_pool = QThreadPool(self)
         self._probe_pool.setMaxThreadCount(min(4, os.cpu_count() or 2))
         self._pending_probe = 0
@@ -157,7 +214,7 @@ class MainWindow(QMainWindow):
         self._save_timer.setInterval(350)
         self._save_timer.timeout.connect(self._flush_settings)
 
-        self.setWindowTitle("ImageForge · 图片格式转换")
+        self.setWindowTitle("ImageForge · 图片格式转换与超分")
         self.setWindowIcon(QIcon(str(ASSETS / "app.ico")))
         self.setAcceptDrops(True)
         self.setMinimumSize(1040, 660)
@@ -178,11 +235,23 @@ class MainWindow(QMainWindow):
         outer.setSpacing(14)
 
         outer.addLayout(self._build_header())
+        outer.addLayout(self._build_nav())
         outer.addLayout(self._build_command_bar())
         outer.addLayout(self._build_body(), 1)
         outer.addWidget(self._build_footer())
 
         self.toast = Toast(central, self.theme)
+
+    def _build_nav(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(2, 0, 2, 0)
+        row.setSpacing(8)
+        self.nav = SegmentedControl(self.theme, MODE_OPTIONS, height=34)
+        self.nav.setFixedWidth(260)
+        self.nav.valueChanged.connect(self._on_mode_changed)
+        row.addWidget(self.nav)
+        row.addStretch(1)
+        return row
 
     def _build_header(self) -> QHBoxLayout:
         theme = self.theme
@@ -221,7 +290,7 @@ class MainWindow(QMainWindow):
         title_row.addWidget(title)
         title_row.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
         title_row.addStretch(1)
-        subtitle = QLabel("图片格式转换 · 多尺寸 ICO 生成")
+        subtitle = QLabel("格式转换 · 多尺寸 ICO · 分辨率放大")
         subtitle.setObjectName("Caption")
         titles.addLayout(title_row)
         titles.addWidget(subtitle)
@@ -312,9 +381,16 @@ class MainWindow(QMainWindow):
         right.setFixedWidth(356)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.panel_stack = QStackedWidget()
         self.settings_panel = SettingsPanel(theme, self.settings)
         self.settings_panel.changed.connect(self._on_options_changed)
-        right_layout.addWidget(self.settings_panel)
+        self.upscale_panel = UpscalePanel(theme, self.settings)
+        self.upscale_panel.changed.connect(self._on_options_changed)
+        self.panel_stack.addWidget(self.settings_panel)
+        self.panel_stack.addWidget(self.upscale_panel)
+        self.panel_stack.setCurrentWidget(self.settings_panel if self.mode == "convert" else self.upscale_panel)
+        right_layout.addWidget(self.panel_stack)
         body.addWidget(right)
         return body
 
@@ -350,7 +426,7 @@ class MainWindow(QMainWindow):
         self.start_btn = QPushButton("开始转换")
         self.start_btn.setProperty("variant", "primary")
         self.start_btn.setMinimumWidth(132)
-        self.start_btn.clicked.connect(self.start_conversion)
+        self.start_btn.clicked.connect(self.start_current)
 
         row.addWidget(self.open_dir_btn)
         row.addWidget(self.cancel_btn)
@@ -363,11 +439,13 @@ class MainWindow(QMainWindow):
             ("Ctrl+O", self.add_files),
             ("Ctrl+Shift+O", self.choose_folder),
             ("Ctrl+V", self.paste),
-            ("Ctrl+Return", self.start_conversion),
+            ("Ctrl+Return", self.start_current),
             ("Esc", self.cancel_conversion),
         ):
             shortcut = QShortcut(QKeySequence(keys), self)
             shortcut.activated.connect(slot)
+        self.nav.set_value(self.mode)
+        self._refresh_mode_texts()
 
     # ------------------------------------------------------------- 主题 --
     def _cycle_theme(self) -> None:
@@ -414,7 +492,7 @@ class MainWindow(QMainWindow):
         self._open_picker(Path(folder))
 
     def _open_picker(self, folder: Path) -> None:
-        if self._worker is not None:
+        if self._is_busy():
             return
         try:
             from .picker import FolderPicker
@@ -452,7 +530,7 @@ class MainWindow(QMainWindow):
         self.toast.show_message("剪贴板里没有图片", "warning", 2000)
 
     def add_paths(self, paths: list[Path], *, autostart: bool = False) -> None:
-        if self._worker is not None:
+        if self._is_busy():
             return
         rows = self.model.add_paths(paths)
         if not rows:
@@ -487,9 +565,11 @@ class MainWindow(QMainWindow):
             row = row2
         thumb = QPixmap.fromImage(image) if image is not None else None
         self.model.set_info(row, info, thumb)
+        if info is not None and getattr(info, "ok", False):
+            self.upscale_panel.set_source_size(info.width, info.height)
         self.file_panel.set_counts(*self._counts())
         self._sync_state()
-        if self._pending_probe == 0 and self._worker is None:
+        if self._pending_probe == 0 and not self._is_busy():
             self._refresh_idle_status()
         self._maybe_autostart()
 
@@ -500,7 +580,7 @@ class MainWindow(QMainWindow):
             self.model.set_status(row2, "failed", message=message)
         self.file_panel.set_counts(*self._counts())
         self._sync_state()
-        if self._pending_probe == 0 and self._worker is None:
+        if self._pending_probe == 0 and not self._is_busy():
             self._refresh_idle_status()
         self._maybe_autostart()
 
@@ -511,13 +591,13 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- 编辑 --
     def remove_row(self, row: int) -> None:
-        if self._worker is not None:
+        if self._is_busy():
             return
         self.model.remove_rows([row])
         self._after_model_change()
 
     def clear_all(self) -> None:
-        if self._worker is not None:
+        if self._is_busy():
             return
         if not self.model.items:
             return
@@ -533,12 +613,13 @@ class MainWindow(QMainWindow):
             self.file_panel.show_empty()
         self.file_panel.set_counts(*self._counts())
         self._sync_state()
-        if self._worker is None:
+        if not self._is_busy():
             self._refresh_idle_status()
 
     def _refresh_idle_status(self) -> None:
         items = self.model.items
         total = len(items)
+        verb, pending_word, running_word, done_word = MODE_NOUNS.get(self.mode, MODE_NOUNS["convert"])
         if total == 0:
             self.status_label.setText("拖入图片或文件夹，也可以按 Ctrl+O 添加")
             return
@@ -547,9 +628,9 @@ class MainWindow(QMainWindow):
             return
         pending = sum(1 for item in items if item.status in ("idle", "failed"))
         if pending:
-            self.status_label.setText(f"共 {total} 张 · {pending} 张待转换")
+            self.status_label.setText(f"共 {total} 张 · {pending} 张{pending_word}")
         else:
-            self.status_label.setText(f"共 {total} 张 · 已完成")
+            self.status_label.setText(f"共 {total} 张 · {done_word}")
 
     def _counts(self) -> tuple[int, int, int]:
         counts = self.model.status_counts()
@@ -597,6 +678,7 @@ class MainWindow(QMainWindow):
             self.out_dir_label.setText(path or "尚未选择输出文件夹")
             self.out_dir_label.setToolTip(path)
         self.settings_panel.refresh_out_mode()
+        self.upscale_panel.refresh()
 
     def _on_options_changed(self) -> None:
         self._sync_state()
@@ -620,9 +702,37 @@ class MainWindow(QMainWindow):
             return
         os.startfile(str(target))  # noqa: S606 - Windows 专用
 
+    # ------------------------------------------------------------- 模式 --
+    def _is_busy(self) -> bool:
+        return self._worker is not None or self._upscale_worker is not None
+
+    def _on_mode_changed(self, mode: str) -> None:
+        if self._is_busy():
+            self.nav.set_value(self.mode)
+            self.toast.show_message("请等待当前批处理结束", "warning", 1800)
+            return
+        self.mode = mode
+        self.settings["mode"] = mode
+        self._save_timer.start()
+        self.panel_stack.setCurrentWidget(self.settings_panel if mode == "convert" else self.upscale_panel)
+        self._refresh_mode_texts()
+        self._sync_state()
+        self._refresh_idle_status()
+
+    def _refresh_mode_texts(self) -> None:
+        verb, pending_word, running_word, done_word = MODE_NOUNS.get(self.mode, MODE_NOUNS["convert"])
+        self.start_btn.setText(f"开始{verb}")
+        self.file_panel.set_hint("双击预览 · Delete 移除")
+
+    def start_current(self) -> None:
+        if self.mode == "upscale":
+            self.start_upscale()
+        else:
+            self.start_conversion()
+
     # ------------------------------------------------------------- 转换 --
     def start_conversion(self) -> None:
-        if self._worker is not None or not self.model.items:
+        if self._is_busy() or not self.model.items:
             return
         targets = [item for item in self.model.items if item.status in ("idle", "failed", "done")]
         if not targets:
@@ -678,6 +788,9 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             self._worker.cancel()
             self.status_label.setText("正在取消…")
+        if self._upscale_worker is not None:
+            self._upscale_worker.cancel()
+            self.status_label.setText("正在取消…")
 
     def _on_convert_progress(self, done: int, total: int, name: str) -> None:
         self.progress.set_value(done / max(1, total))
@@ -715,21 +828,115 @@ class MainWindow(QMainWindow):
         self.set_controls_enabled(True)
         self.cancel_btn.setEnabled(False)
 
+    # ------------------------------------------------------------- 放大 --
+    def start_upscale(self) -> None:
+        if self._is_busy() or not self.model.items:
+            return
+        targets = [item for item in self.model.items if item.status in ("idle", "failed", "done")]
+        if not targets:
+            self.toast.show_message("没有可放大的图片", "warning", 2000)
+            return
+        options = self.upscale_panel.options()
+        out_root: Path | None = None
+        keep_tree = False
+        base_dir: Path | None = None
+        if self.settings["out_mode"] == "folder":
+            raw = str(self.settings["out_dir"] or "")
+            if not raw:
+                self.toast.show_message("请先选择输出文件夹", "warning", 2400)
+                self.choose_output_dir()
+                return
+            out_root = Path(raw)
+            out_root.mkdir(parents=True, exist_ok=True)
+            keep_tree = bool(self.settings["keep_tree"])
+            if keep_tree:
+                try:
+                    base_dir = Path(os.path.commonpath([str(item.path.parent) for item in targets]))
+                except ValueError:
+                    base_dir = None
+        self._convert_started = len(targets)
+        self._convert_done = 0
+        self._convert_failed = 0
+        self._last_output = None
+        for item in targets:
+            row = self.model.row_of(item.path)
+            if row is not None:
+                self.model.set_status(row, "running")
+        self.progress.set_value(0.0)
+        self.progress.set_indeterminate(False)
+        self.status_label.setText(f"正在放大 0/{len(targets)}…")
+        self.set_controls_enabled(False)
+        self.cancel_btn.setEnabled(True)
+
+        worker = UpscaleWorker(
+            [item.path for item in targets],
+            options,
+            out_root,
+            keep_tree,
+            base_dir,
+            self,
+        )
+        worker.progressed.connect(self._on_upscale_progress)
+        worker.resulted.connect(self._on_upscale_result)
+        worker.finished_batch.connect(self._on_upscale_finished)
+        self._upscale_worker = worker
+        worker.start()
+
+    def _on_upscale_progress(self, done: int, total: int, name: str) -> None:
+        self.progress.set_value(done / max(1, total))
+        self.status_label.setText(f"正在放大 {done}/{total} · {name}")
+
+    def _on_upscale_result(self, result) -> None:
+        row = self.model.row_of(result.src)
+        if row is None:
+            return
+        self.model.set_result(row, result)
+        if result.ok:
+            self._convert_done += 1
+            self._last_output = result.dest.parent if result.dest else None
+        else:
+            self._convert_failed += 1
+        self.file_panel.set_counts(*self._counts())
+
+    def _on_upscale_finished(self, results, cancelled: bool) -> None:
+        self._upscale_worker = None
+        self.progress.set_indeterminate(False)
+        total = len(results)
+        failed = sum(1 for r in results if not r.ok)
+        done = total - failed
+        self.progress.set_value(1.0 if not cancelled else self.progress._value)
+        self._after_model_change()
+        if cancelled:
+            self.status_label.setText(f"已取消 · 完成 {done}/{total}")
+            self.toast.show_message("已取消", "warning", 2000)
+        elif failed:
+            self.status_label.setText(f"完成 {done} · 失败 {failed}")
+            self.toast.show_message(f"{failed} 张放大失败，见红色状态", "error", 3000)
+        else:
+            self.status_label.setText(f"全部完成 · 共 {done} 张")
+            self.toast.show_message(f"已完成 {done} 张", "success", 2400)
+        self.set_controls_enabled(True)
+        self.cancel_btn.setEnabled(False)
+
     def set_controls_enabled(self, enabled: bool) -> None:
         for widget in (self.add_btn, self.folder_btn, self.paste_btn, self.clear_btn, self.start_btn):
             widget.setEnabled(enabled)
         self.file_panel.list.setEnabled(enabled)
         self.settings_panel.set_enabled(enabled)
+        self.upscale_panel.set_enabled(enabled)
+        self.nav.setEnabled(enabled)
         self.cancel_btn.setEnabled(not enabled)
-        self.start_btn.setText("开始转换")
+        self._refresh_mode_texts()
 
     def _sync_state(self) -> None:
         total = len(self.model.items)
         ready = sum(1 for item in self.model.items if item.status in ("idle", "failed", "done"))
-        self.start_btn.setEnabled(self._worker is None and ready > 0)
-        self.start_btn.setText(f"开始转换 · {ready}" if ready else "开始转换")
-        self.clear_btn.setEnabled(self._worker is None and total > 0)
-        self.progress.setVisible(self._worker is not None or self.progress._value > 0)
+        verb = MODE_NOUNS.get(self.mode, MODE_NOUNS["convert"])[0]
+        busy = self._is_busy()
+        self.start_btn.setEnabled(not busy and ready > 0)
+        self.start_btn.setText(f"开始{verb} · {ready}" if ready else f"开始{verb}")
+        self.clear_btn.setEnabled(not busy and total > 0)
+        self.progress.setVisible(busy or self.progress._value > 0)
         if total:
             self.file_panel.set_counts(*self._counts())
         self._refresh_out_dir()
@@ -757,7 +964,7 @@ class MainWindow(QMainWindow):
                 files.append(path)
         if files:
             self.add_paths(files)
-        if folders and self._worker is None:
+        if folders and not self._is_busy():
             self._open_picker(folders[0])
         if not files and not folders:
             self.toast.show_message("没有可用的图片", "warning", 2000)
@@ -784,6 +991,9 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             self._worker.cancel()
             self._worker.wait(3000)
+        if self._upscale_worker is not None:
+            self._upscale_worker.cancel()
+            self._upscale_worker.wait(5000)
         self.settings["window"] = f"{self.width()}x{self.height()}"
         self.settings.save()
         self._probe_pool.clear()
