@@ -165,7 +165,7 @@ def weights_root() -> Path:
     """模型根目录（其下直接是 ncnn/）；找不到已安装的目录时返回首选安装位置。"""
     candidates = _candidate_roots()
     for root in candidates:
-        if (root / "ncnn").is_dir():
+        if (root / "ncnn").is_dir() or (root / "apisr").is_dir():
             return root
     return candidates[0]
 
@@ -181,6 +181,26 @@ def models_ready() -> bool:
 def models_location_hint() -> str:
     """给用户看的安装位置提示。"""
     return str(weights_root())
+
+
+def pack_ready(pack: str) -> bool:
+    """某个模型包（ncnn / apisr）是否已安装且可用。"""
+    if pack == "ncnn":
+        return models_ready()
+    if pack == "apisr":
+        try:
+            from . import onnx_runner  # 延迟导入
+
+            return bool(onnx_runner.models_ready())
+        except Exception:  # noqa: BLE001 - 运行库缺失时视为未安装
+            return False
+    return False
+
+
+def model_ready(model: "ModelSpec | str") -> bool:
+    """某个模型（或 model_id）所需的模型包是否就绪。"""
+    spec = get_model(model) if isinstance(model, str) else model
+    return pack_ready(spec.pack)
 
 
 def ncnn_exe() -> Path:
@@ -223,6 +243,8 @@ def clear_model_cache() -> None:
 
 def _available_scales(model: ModelSpec) -> tuple[int, ...]:
     """模型在磁盘上真实可用的倍率（优先与 catalog 声明取交集）。"""
+    if model.backend == "onnx":
+        return tuple(sorted(model.scales))
     table = _weight_table(model.model_dir)
     if not table:
         return tuple(sorted(model.scales))
@@ -669,6 +691,9 @@ def _infer(
     progress,
     cancel,
 ) -> Image.Image:
+    if model.backend == "onnx":
+        return _infer_onnx(image, model, scale, options, warnings, progress, cancel)
+
     denoise, note = _resolve_denoise(model, scale, options.denoise)
     if note:
         warnings.append(note)
@@ -703,6 +728,36 @@ def _infer(
                 continue
             raise
     raise last_error  # pragma: no cover - 循环至少会 raise 或 return
+
+
+def _infer_onnx(
+    image: Image.Image,
+    model: ModelSpec,
+    scale: int,
+    options: UpscaleOptions,
+    warnings: list[str],
+    progress,
+    cancel,
+) -> Image.Image:
+    """APISR（ONNX / DirectML）单轮推理。"""
+    from . import onnx_runner  # 延迟导入：避免与 engine 的循环依赖
+
+    if not onnx_runner.models_ready():
+        raise RuntimeError(
+            "APISR 模型未安装，请在右侧点「下载 APISR 模型」或导入 apisr-onnx-models.zip"
+        )
+    tile = _resolve_tile(options.tile, warnings)
+    return onnx_runner.run_onnx(
+        image,
+        model.onnx_file,
+        scale=scale,
+        fixed_input=model.fixed_input,
+        device=options.device,
+        tile=tile,
+        warnings=warnings,
+        progress=_sub_progress(progress),
+        cancel=cancel,
+    )
 
 
 def _infer_chain(

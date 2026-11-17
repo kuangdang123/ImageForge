@@ -10,3 +10,6 @@ desktop.ini
 build/
 dist/
 *.spec
+
+# 按需下载的 APISR 模型（开发时本地放置，不进仓库）
+imgforge/upscale/weights/apisr/

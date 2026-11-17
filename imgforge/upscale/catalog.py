@@ -1,4 +1,4 @@
-"""Real-CUGAN 模型目录。
+"""模型目录（Real-CUGAN ncnn + APISR ONNX）。
 
 只描述"有哪些模型、支持哪些倍率/降噪"，不碰任何推理细节；
 UI 与引擎都从这里取同一份元数据。
@@ -15,7 +15,7 @@ class ModelSpec:
     name: str
     family: str
     backend: str
-    model_dir: str            # 传给 exe 的 -m
+    model_dir: str            # ncnn: 传给 exe 的 -m；onnx: 模型子目录名（apisr）
     scales: tuple[int, ...]
     default_scale: int
     default_denoise: int
@@ -23,6 +23,8 @@ class ModelSpec:
     rank: int                 # 0=最强/最慢，数字越大越轻量
     description: str
     tags: tuple[str, ...] = ()
+    onnx_file: str = ""       # backend="onnx" 时使用的 .onnx 文件名
+    fixed_input: int = 0      # ONNX 固定输入边长（窗口注意力模型），0=动态
 
     def denoise_levels_for(self, scale: int) -> tuple[int, ...]:
         """该倍率下真实可用的降噪等级（以磁盘权重为准）。
@@ -30,10 +32,18 @@ class ModelSpec:
         降噪档位是（模型, 倍率）的函数：models-pro 2×/3× 只有 -1/0/3，
         models-se 3×/4× 只有 -1/0/3，models-nose 的 2× 只有 0。
         这里委托引擎扫描权重目录，避免把不存在的组合传给 exe（会崩溃）。
+        APISR（onnx）模型没有降噪参数，返回空元组。
         """
+        if self.backend == "onnx":
+            return ()
         from .engine import supported_denoise_levels  # 延迟导入，避免循环依赖
 
         return supported_denoise_levels(self, int(scale))
+
+    @property
+    def pack(self) -> str:
+        """该模型属于哪个模型包（下载/安装单位）。"""
+        return "apisr" if self.backend == "onnx" else "ncnn"
 
 
 MODELS: tuple[ModelSpec, ...] = (
@@ -78,6 +88,54 @@ MODELS: tuple[ModelSpec, ...] = (
         rank=2,
         description="最轻快，只做 2× 超分，降噪较弱",
         tags=("fast", "light"),
+    ),
+    ModelSpec(
+        id="apisr-grl",
+        name="APISR GRL 4×",
+        family="APISR",
+        backend="onnx",
+        model_dir="apisr",
+        scales=(4,),
+        default_scale=4,
+        default_denoise=-1,
+        denoise_levels=(),
+        rank=3,
+        description="1.03M 参数、超轻量，DirectML GPU 上最快；面向动漫截图，固定 4× 输出",
+        tags=("fast", "light", "anime"),
+        onnx_file="grl4.onnx",
+        fixed_input=128,
+    ),
+    ModelSpec(
+        id="apisr-rrdb",
+        name="APISR RRDB 4×",
+        family="APISR",
+        backend="onnx",
+        model_dir="apisr",
+        scales=(4,),
+        default_scale=4,
+        default_denoise=-1,
+        denoise_levels=(),
+        rank=4,
+        description="CVPR 2024 论文主模型，质量与速度均衡；固定 4× 输出",
+        tags=("balanced", "anime", "general"),
+        onnx_file="rrdb4.onnx",
+        fixed_input=0,
+    ),
+    ModelSpec(
+        id="apisr-dat",
+        name="APISR DAT 4×",
+        family="APISR",
+        backend="onnx",
+        model_dir="apisr",
+        scales=(4,),
+        default_scale=4,
+        default_denoise=-1,
+        denoise_levels=(),
+        rank=5,
+        description="10.89M 参数，画质最好，GPU 上仍较慢；固定 4× 输出",
+        tags=("detail", "slow", "anime"),
+        onnx_file="dat4.onnx",
+        fixed_input=128,
     ),
 )
 

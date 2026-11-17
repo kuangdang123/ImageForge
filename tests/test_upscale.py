@@ -127,8 +127,15 @@ class CatalogTest(unittest.TestCase):
         for model in MODELS:
             self.assertIn(model.default_scale, model.scales, model.id)
             self.assertIn(model.default_denoise, DENOISE_LABELS, model.id)
-            self.assertEqual(model.family, "Real-CUGAN")
-            self.assertEqual(model.backend, "ncnn")
+            if model.backend == "onnx":
+                self.assertEqual(model.family, "APISR", model.id)
+                self.assertTrue(model.onnx_file, model.id)
+                self.assertEqual(model.pack, "apisr", model.id)
+            else:
+                self.assertEqual(model.family, "Real-CUGAN", model.id)
+                self.assertEqual(model.backend, "ncnn", model.id)
+                self.assertEqual(model.pack, "ncnn", model.id)
+                self.assertFalse(model.onnx_file, model.id)
             self.assertTrue(model.description)
 
     @unittest.skipUnless(HAVE_WEIGHTS, "缺少模型权重目录，跳过")

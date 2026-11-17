@@ -620,8 +620,8 @@ class MainWindow(QMainWindow):
     def _refresh_idle_status(self) -> None:
         items = self.model.items
         total = len(items)
-        if self.mode == "upscale" and not self.upscale_panel.is_ready():
-            self.status_label.setText("放大模型未安装，先在右侧点「下载模型」")
+        if self.mode == "upscale" and not self.upscale_panel.selected_ready():
+            self.status_label.setText("所选放大模型未安装，先在右侧卡片里下载对应模型包")
             return
         verb, pending_word, running_word, done_word = MODE_NOUNS.get(self.mode, MODE_NOUNS["convert"])
         if total == 0:
@@ -838,8 +838,8 @@ class MainWindow(QMainWindow):
         self._refresh_idle_status()
 
     def start_upscale(self) -> None:
-        if not self.upscale_panel.is_ready():
-            self.toast.show_message("先下载放大模型（右侧卡片）", "warning", 2600)
+        if not self.upscale_panel.selected_ready():
+            self.toast.show_message("所选模型的模型包还没下载（右侧卡片）", "warning", 2600)
             return
         if self._is_busy() or not self.model.items:
             return
@@ -944,7 +944,7 @@ class MainWindow(QMainWindow):
         ready = sum(1 for item in self.model.items if item.status in ("idle", "failed", "done"))
         verb = MODE_NOUNS.get(self.mode, MODE_NOUNS["convert"])[0]
         busy = self._is_busy()
-        models_ok = self.mode != "upscale" or self.upscale_panel.is_ready()
+        models_ok = self.mode != "upscale" or self.upscale_panel.selected_ready()
         self.start_btn.setEnabled(not busy and ready > 0 and models_ok)
         self.start_btn.setText(f"开始{verb} · {ready}" if ready else f"开始{verb}")
         self.clear_btn.setEnabled(not busy and total > 0)

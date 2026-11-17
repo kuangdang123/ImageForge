@@ -1,9 +1,9 @@
-# ImageForge 2.3.0
+# ImageForge 2.4.0
 
-把 PNG / JPG / WebP / BMP / GIF / TIFF / AVIF 互转、一键生成**多尺寸 Windows 图标**，还能把图片**无损放大 2–4 倍**或用 Real-CUGAN 超分到 1080p / 2K / 4K / 8K 的桌面小工具。
+把 PNG / JPG / WebP / BMP / GIF / TIFF / AVIF 互转、一键生成**多尺寸 Windows 图标**，还能把图片**放大 2–32 倍**、用 Real-CUGAN（Vulkan）或 APISR（DirectML GPU）超分到 1080p / 2K / 4K / 8K 的桌面小工具。
 
 界面用 PySide6（Qt 6）编写：原生控件、明暗两套主题、1.5× 高 DPI 下依然锐利；顶部导航切换「格式转换」与「分辨率放大」，两页共用同一个待处理队列。所有偏好（模式、格式、尺寸、质量、模型、主题、窗口大小）下次启动自动恢复。
-所有处理都在本机完成，不依赖浏览器、不上传文件、不需要联网。
+所有处理都在本机完成，不依赖浏览器、不上传文件、不需要联网（模型首次下载除外）。
 
 **[下载发布版](https://github.com/kuangdang123/ImageForge/releases/latest)** —— 单个 `ImageForge.exe`，不需要装 Python。
 
@@ -30,7 +30,10 @@
 
 - **多尺寸 ICO**：一次输出 16 / 24 / 32 / 48 / 64 / 128 / 256 七档，每档独立重采样，不是把一张大图塞进去。
 - **常用格式互转**：PNG、JPG、WebP、BMP、GIF、TIFF、AVIF 任意方向。
-- **分辨率放大**：Real-CUGAN（ncnn/Vulkan）三档模型下拉选择、按性能排序，每个模型后面带彩色短标签（画质 / 动漫 / 均衡 / 最快 / 轻量）方便一眼挑；支持按倍数（`1×`–`32×`，8× 及以上由多轮模型组合）或按目标尺寸（720p / 1080p / 2K / 4K / 8K / 自定义）放大；设备默认 `自动`（优先 GPU，不可用时回退 CPU），针对动漫 / 二次元 / 游戏立绘做了调优。模型按需下载，不占 exe 体积。
+- **分辨率放大**：两套模型共 6 档，模型下拉按性能排序、每项带彩色短标签（画质 / 动漫 / 均衡 / 最快 / 轻量）方便一眼挑：
+  - **Real-CUGAN**（ncnn + Vulkan）：Pro（细节最强）/ SE（均衡通用）/ NoSE（最快最轻）——免显卡、CPU 也能跑；
+  - **APISR**（ONNX + DirectML GPU）：GRL（超轻量最快）/ RRDB（CVPR 2024 论文主模型）/ DAT（画质最好）——面向动画截图，GPU 上比 CPU 快 5–9 倍，固定 4× 输出。
+  支持按倍数（`1×`–`32×`，8× 及以上由多轮模型组合）或按目标尺寸（720p / 1080p / 2K / 4K / 8K / 自定义）放大；设备默认 `自动`（优先 GPU，不可用时回退 CPU）。模型按需下载，不占 exe 体积。
 - **文件夹里挑图**：「选择文件夹…」打开图片列表，搜索、全选、Shift 连选，只把想要的几张加进队列。
 - **批处理**：拖入文件或文件夹、粘贴剪贴板图片、递归扫描子目录、保留目录结构。
 - **可控输出**：有损质量滑杆、WebP 无损、保留 EXIF / ICC、文件名后缀、输出到源文件旁边或指定文件夹；放大页还能选择保持原格式或另存 PNG / JPG / WebP。
@@ -112,20 +115,31 @@ pip install -r requirements.txt
 
 ![分辨率放大页](docs/screenshots/qt-upscale-light.png)
 
+![模型下拉与彩色标签](docs/screenshots/qt-model-menu.png)
+
 - **模型**：下拉选择，按性能从强到弱排列，每项右侧有彩色标签：
   - `Real-CUGAN Pro`：`画质` `动漫` `较慢` —— 细节最强，支持 2× / 3×，动漫、游戏立绘首选，速度最慢；
   - `Real-CUGAN SE`：`均衡` `通用` —— 支持 2× / 3× / 4×，通用性最好；
-  - `Real-CUGAN NoSE`：`最快` `轻量` —— 只做 2×，适合批量快速处理。
+  - `Real-CUGAN NoSE`：`最快` `轻量` —— 只做 2×，适合批量快速处理；
+  - `APISR GRL`：`最快` `轻量` `动漫` —— 1M 参数的轻量模型，DirectML GPU 上一张 128 瓦片约 0.4 秒，固定 4× 输出；
+  - `APISR RRDB`：`均衡` `动漫` `通用` —— CVPR 2024 论文主模型，质量/速度折中，固定 4× 输出；
+  - `APISR DAT`：`画质` `较慢` `动漫` —— 10.9M 参数，画质最好但 GPU 上仍较慢，固定 4× 输出。
 
   标签含义：`画质` = 细节最好但最慢；`均衡` = 画质与速度折中；`最快` = 速度优先；`动漫` = 针对二次元线条/色块调优；`轻量` = 权重小、内存占用低；`较慢` = 单张耗时明显更长。
 
-  > 第一次使用放大功能时右侧只会显示一张「放大模型」卡片：点「下载模型」自动下载并安装（约 44 MB，带进度条，只需一次）；离线或内网环境可以下载 `realcugan-ncnn-models.zip` 后点「从文件安装…」。默认装到 `%LOCALAPPDATA%\ImageForge\models`；把 `models` 文件夹放到 exe 同目录就是便携模式；开发态如果仓库里有 `imgforge/upscale/weights` 会直接用，不需要下载。
-- **设备**：默认 `自动`，优先用 GPU（Vulkan），显卡不可用时自动回退 CPU；也可以手动锁定 `GPU` / `CPU`。
+  > 第一次使用放大功能时右侧只会显示一张「放大模型」卡片，两个包分别下载（带进度条，只需一次）：
+  > - `Real-CUGAN 模型` 约 44 MB —— Real-CUGAN 三档共用，走 Vulkan/CPU；
+  > - `APISR 模型` 约 59 MB —— APISR 三档共用，走 DirectML GPU（Windows 10/11 自带 DirectML，无需装 CUDA）。
+  >
+  > 离线或内网环境可以下载 `realcugan-ncnn-models.zip` / `apisr-onnx-models.zip` 后点「从文件安装…」。默认装到 `%LOCALAPPDATA%\ImageForge\models`；把 `models` 文件夹放到 exe 同目录就是便携模式；开发态如果仓库里有 `imgforge/upscale/weights` 会直接用，不需要下载。
+
+  ![按需下载模型](docs/screenshots/qt-models-download.png)
+- **设备**：默认 `自动`，优先用 GPU（Real-CUGAN 走 Vulkan，APISR 走 DirectML），显卡不可用时自动回退 CPU；也可以手动锁定 `GPU` / `CPU`。
 - **两种放大方式**（互相独立，不是同一件事）：
   - `按倍数`：`1× / 2× / 3× / 4× / 8× / 16× / 32×`。模型单轮最多放 4×，8× 及以上由多轮模型推理组合而成（例如 32× = 4× → 4× → 2×），最后再校正到精确倍率；`1×` 不调用模型，只做重新编码；
   - `按目标尺寸`：720p / 1080p / 2K / 4K / 8K 或自定义宽高；程序按比例把最长边缩放到目标框内，**不会拉伸变形**。
-- **降噪**：档位随「模型 + 倍率」变化（保守 / 不降噪 / 轻度 / 中度 / 强降噪），不可用的组合会自动落在最接近的档位，不会崩溃。
-- **TTA 增强**：质量略好、速度约慢一倍。
+- **降噪**：档位随「模型 + 倍率」变化（保守 / 不降噪 / 轻度 / 中度 / 强降噪），不可用的组合会自动落在最接近的档位，不会崩溃。APISR（ONNX）模型没有降噪档位，这一行会自动隐藏。
+- **TTA 增强**：质量略好、速度约慢一倍（仅 Real-CUGAN 支持；APISR 会隐藏该开关）。
 - **输出**：默认保持原格式，也可以统一另存为 PNG / JPG / WebP；默认文件名追加 `_upscaled`，不覆盖原图。
 
 > 8× / 16× / 32× 属于「多轮组合放大」：耗时随轮数成倍增加，输出体积也很大。程序会先预估输出尺寸，超过 2.5 亿像素或单边 32768 像素时会直接拒绝并提示降低倍率。
@@ -182,9 +196,9 @@ wide_banner.png  256×256  10.4 KB   wide_banner.ico  完成
 
 | 参数 | 说明 |
 | --- | --- |
-| `--check` | 自检：模型/推理程序是否可用，并真的放大一张 64×64 小图 |
+| `--check` | 自检：模型包/推理程序是否可用，并真的放大一张 64×64 小图 |
 | `--check --require-models` | 同上，但模型未安装时返回失败 |
-| `--install-models` | 无界面下载放大模型（约 44 MB） |
+| `--install-models [ncnn\|apisr\|all]` | 无界面下载模型包（ncnn 约 44 MB / apisr 约 59 MB / 默认 all） |
 | `--theme light/dark/system` | 强制主题 |
 
 ## 关于 ICO
@@ -251,10 +265,11 @@ ImageForge/
 │  │  ├─ widgets.py          卡片、胶囊、分段选择、开关、Toast…
 │  │  └─ icons.py            矢量图标
 │  ├─ upscale/               分辨率放大
-│  │  ├─ catalog.py          Real-CUGAN 模型目录（性能排序、倍率、降噪档位）
+│  │  ├─ catalog.py          模型目录（Real-CUGAN 3 档 + APISR ONNX 3 档，性能排序、倍率、降噪档位）
 │  │  ├─ targets.py          目标尺寸预设与缩放计算
-│  │  ├─ engine.py           ncnn 子进程推理、透明通道、错误翻译、模型路径解析
-│  │  ├─ download.py         模型包下载 / sha256 校验 / 解压安装
+│  │  ├─ engine.py           ncnn 子进程 / ONNX 推理调度、透明通道、错误翻译、模型路径解析
+│  │  ├─ onnx_runner.py      APISR ONNX Runtime（DirectML/CPU）推理、128 瓦片融合
+│  │  ├─ download.py         模型包下载 / sha256 校验 / 解压安装（ncnn、apisr 两个包）
 │  │  └─ weights/ncnn/       realcugan-ncnn-vulkan.exe 与三套模型权重（源码运行自带；exe 不含）
 │  ├─ converter.py           格式表、单文件转换、批量任务
 │  ├─ ico.py                 ICO 渲染与容器编码
@@ -266,7 +281,7 @@ ImageForge/
 │  ├─ gui.py / widgets.py / theme.py / picker.py   1.x tkinter 界面
 │  └─ assets/                应用图标与 logo
 ├─ samples/                  示例图片
-├─ tests/                    96 个单元测试（格式转换 + 挑图 + 单实例 + 设置 + 超分 + 模型安装）
+├─ tests/                    152 个单元测试（格式转换 + 挑图 + 单实例 + 设置 + 超分 + ONNX + 模型安装）
 ├─ tools/
 │  ├─ make_icon.py           从 assets/logo.png 重新生成 assets/app.ico
 │  ├─ check_contrast.py      色板对比度校验
@@ -275,7 +290,7 @@ ImageForge/
 │  ├─ qt_smoke.py            离屏冒烟：添加 → 转换 → 预览 → 挑图
 │  ├─ qt_upscale_smoke.py    离屏冒烟：添加 → 切到放大页 → 真实推理一张
 │  ├─ qt_models_smoke.py     离屏冒烟：未安装模型 → 安装卡片 → 安装后恢复
-│  ├─ pack_models.py         打包 dist/models/realcugan-ncnn-models.zip
+│  ├─ pack_models.py         打包 dist/models/realcugan-ncnn-models.zip 与 apisr-onnx-models.zip
 │  ├─ qt_shot.py             真实平台界面截图
 │  ├─ shot_window.py         按标题截取任意窗口（含打包后的 exe）
 │  ├─ gui_smoke.py / picker_smoke.py   1.x 界面冒烟
@@ -286,26 +301,34 @@ ImageForge/
 ## 开发
 
 ```powershell
-python -m unittest discover -s tests          # 96 个测试
+python -m unittest discover -s tests          # 152 个测试
 python tools/make_icon.py                     # 从 assets/logo.png 生成多尺寸 app.ico
 python tools/check_contrast.py                # 明暗两套色板 WCAG 校验
 python tools/qt_smoke.py                      # 离屏跑完整流程
 python tools/qt_settings_smoke.py             # 设置改动 → 关窗 → 重新加载是否保留
 python tools/qt_upscale_smoke.py              # 离屏冒烟：放大页 + 真实推理
 python app2.pyw --check                       # 自检：模型是否存在 + 跑一张 64px 小图
-python app2.pyw --install-models              # 无界面下载放大模型（约 44 MB）
-python tools/pack_models.py                   # 打包模型 zip（上传到 models-v1 release）
+python app2.pyw --install-models              # 无界面下载放大模型（ncnn / apisr / all）
+python tools/pack_models.py                   # 打包 ncnn 与 apisr 模型 zip（上传到 models-v1 / models-v2）
 python tools/qt_shot.py light tmp\a.png       # 真实窗口截图（dark / --picker / --preview / --convert / --upscale）
-python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 52 MB，模型不含在内）
+python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 87 MB，模型不含在内）
 ```
 
 开发脚本把配置写到 `tmp/settings/`（通过 `IMAGEFORGE_HOME` 环境变量重定向），不会动 `%APPDATA%` 里的真实配置。
 
 ## 更新日志
 
+### 2.4.0
+
+- 新增 **APISR 三档模型**（GRL / RRDB / DAT），通过 ONNX Runtime + **DirectML** 跑在核显/独显上，不需要 CUDA 也不需要 torch；面向动漫截图与游戏立绘，GPU 上比 CPU 快 5–9 倍。
+- 模型包拆成两个：Real-CUGAN（ncnn，约 44 MB，Vulkan/CPU）与 APISR（ONNX，约 59 MB，DirectML GPU），安装卡分别显示、可单独下载或本地导入；只装了 Real-CUGAN 时选 APISR 会提示先下载，开始按钮同步禁用。
+- 模型下拉共 6 档，每档带彩色标签（画质 / 动漫 / 均衡 / 最快 / 轻量 / 较慢）；APISR 模型固定 4× 输出，选其它倍率会提示「先在 4× 放大后缩放回目标尺寸」，并自动隐藏不适用的降噪与 TTA 选项。
+- exe 内置 ONNX Runtime，体积约 87 MB（模型仍不打包）；`--check` 会分别报告两个模型包与 ONNX 运行后端，`--install-models ncnn|apisr|all` 可单独下载。
+- 新增 `imgforge/upscale/onnx_runner.py`（128 瓦片重叠融合、会话缓存、透明通道 alpha 单独放大）与 37 个 ONNX 测试 + 28 个模型包测试，测试总数 152。
+
 ### 2.3.0
 
-- 超分模型从 exe 中拆出，改为首次使用时按需下载（约 44 MB，带进度条与 sha256 校验），也支持从本地 zip 离线安装；exe 从约 96 MB 降到约 52 MB。
+- 超分模型从 exe 中拆出，改为首次使用时按需下载（约 44 MB，带进度条与 sha256 校验），也支持从本地 zip 离线安装；exe 从约 100 MB 降到约 52 MB。
 - 模型下拉框每项右侧新增彩色短标签（画质 / 动漫 / 较慢 / 均衡 / 通用 / 最快 / 轻量），一眼就能挑模型；说明文字与标签含义写进了 README 与 FAQ。
 - 未安装模型时放大页只显示「放大模型」卡片（下载模型 / 从文件安装），开始按钮禁用并在状态栏提示；安装后四张设置卡自动恢复。
 - 新增 `--install-models`（无界面下载）与 `--check --require-models`（模型缺失视为失败）；`--check` 在模型未安装时给出友好提示而不是报错。
@@ -359,17 +382,17 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 
 **挑图时有些行是灰的、右边写着「已在列表」？** 这些图已经在待处理队列里了，重复勾选不会重复添加。
 
-**放大很慢，正常吗？** 正常。超分是逐像素推理，CPU 上 `800×600` 的照片大约 20–45 秒，`200×520` 的插画约 6–10 秒；用 GPU（Vulkan）会快很多。批量处理时进度条会逐张推进。
+**放大很慢，正常吗？** 正常。超分是逐像素推理，CPU 上 `800×600` 的照片大约 20–45 秒，`200×520` 的插画约 6–10 秒；Real-CUGAN 走 GPU（Vulkan）、APISR 走 GPU（DirectML）会快数倍。批量处理时进度条会逐张推进。
 
 **提示「CPU 模式不可用，已改用 GPU」？** 说明当前模型/图片组合在 CPU 上推理失败，程序自动改用 GPU 重试，结果不受影响；这条只是一行提示。
 
-**三个模型怎么选？** 看下拉框里的彩色标签即可：`画质`（Pro，2× / 3×，细节最强）> `均衡`（SE，2× / 3× / 4×，通用）> `最快`（NoSE，只做 2×，批量速度优先）。动漫 / 游戏立绘优先带 `动漫` 标签的 Pro；照片或不确定场景用 `均衡`；只是先把尺寸放大、后面还要再处理就用 `最快`。
+**六个模型怎么选？** 看下拉框里的彩色标签即可：要细节 → `画质`（Real-CUGAN Pro 或 APISR DAT）；要速度 → `最快`（NoSE 或 APISR GRL）；拿不准 → `均衡`（SE 或 APISR RRDB）。动漫 / 游戏截图优先带 `动漫` 标签的 APISR（对线条和色块更友好，DAT 画质最好、GRL 最快）；普通照片或想稳一点用 Real-CUGAN SE；只是先放大尺寸、后面还要处理就用 NoSE / GRL。
 
-**为什么没有 APISR 模型？APISR 是不是不如 Real-CUGAN？** 不是。APISR（CVPR 2024）面向「真实退化」的动画截图复原（模糊、压缩噪点、轻中度瑕疵），GRL 极轻、DAT 画质最高，很多场景确实强于 Real-CUGAN。没有内置是因为它只有 PyTorch 权重：接入需要带 torch/torchvision，PyInstaller 打包后 exe 会从约 52 MB 涨到 1.5–2 GB（torch 本体就有 500 MB，加上 MKL/DLL 更大），启动也明显变慢；而 Real-CUGAN 的 ncnn/Vulkan 版本可以免 Python 依赖直接跑，模型包只有 45.9 MB。如果后续真需要 APISR，可以走 ONNX 转换来保留体积优势。
+**APISR 是不是不如 Real-CUGAN？** 不是。APISR（CVPR 2024）面向「真实退化」的动画截图复原（模糊、压缩噪点、轻中度瑕疵），GRL 极轻、DAT 画质最高，很多场景确实强于 Real-CUGAN。2.4.0 已内置 APISR 三档：模型导出为 ONNX，用 **DirectML** 在 GPU 上推理，不需要 CUDA、也不带 torch（权重 59 MB，按需下载），所以不会出现「装 APISR 就要 1.5–2 GB torch」的问题。
 
 **为什么 ImageForge-SR.exe 只有 8 MB，却能跑 18 个模型？** 因为那个 exe 不含模型也不含 torch：它依赖本机已经装好的 Python + PyTorch，运行时再到 `weights/` 目录读权重。所以它「轻」的前提是机器上已经有约 1.5 GB 的 Python 环境；本项目的 exe 是自包含的（不要求装 Python），模型单独按需下载。
 
-**模型下载失败 / 公司网络下不了怎么办？** 在 [models-v1 release](https://github.com/kuangdang123/ImageForge/releases/tag/models-v1) 手动下载 `realcugan-ncnn-models.zip`，然后在放大页点「从文件安装…」选择它；也可以命令行 `ImageForge.exe --install-models`（会自动校验 sha256）。
+**模型下载失败 / 公司网络下不了怎么办？** 手动下载 [Real-CUGAN 模型包](https://github.com/kuangdang123/ImageForge/releases/tag/models-v1) 或 [APISR 模型包](https://github.com/kuangdang123/ImageForge/releases/tag/models-v2)，在放大页点「从文件安装…」选择 zip；也可以命令行 `ImageForge.exe --install-models ncnn` / `ImageForge.exe --install-models apisr`（自动校验 sha256）。
 
 **8× / 16× / 32× 是怎么实现的？** Real-CUGAN 单轮最多 4×，更高倍率由多轮模型推理串联（例如 32× = 4× → 4× → 2×），最后再校正到精确尺寸。倍率越高耗时约成倍增长，输出文件也越大；预计超过 2.5 亿像素或单边 32768 像素时程序会直接拒绝并提示。`1×` 不调用模型，只做格式转换。
 
@@ -385,6 +408,6 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 
 **为什么 AVIF 慢？** 编码本身计算量大，批量时耐心等一下；急着用可以先转 WebP。
 
-**exe 为什么是 52 MB？** 基本是 PySide6 的 Qt 运行库（已排除 WebEngine、QML、3D 等模块）。2.3.0 起模型不再打进 exe，而是首次使用放大功能时下载 45.9 MB 的模型包；1.x 的 tkinter 版本只有 23 MB。
+**exe 为什么是 87 MB？** 主要是 PySide6 的 Qt 运行库 + ONNX Runtime（DirectML 推理，已排除 WebEngine、QML、3D 等模块）；模型仍然不打进 exe，首次使用放大功能时再按包下载（Real-CUGAN 45.9 MB / APISR 59 MB）。1.x 的 tkinter 版本只有 23 MB。
 
 **模型装在哪？能换位置吗？** 默认 `%LOCALAPPDATA%\ImageForge\models`。设置环境变量 `IMAGEFORGE_MODELS_DIR` 可指定任意目录（只认这个位置，不会偷偷回退）；把 `models` 文件夹放到 exe 同目录则是便携模式，整个文件夹拷走即可。

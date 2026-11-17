@@ -48,6 +48,19 @@ MODE_OPTIONS = [("scale", "按倍数"), ("target", "按目标尺寸")]
 DEVICE_OPTIONS = [("auto", "自动"), ("gpu", "GPU"), ("cpu", "CPU")]
 CUSTOM = "custom"
 
+#: 安装卡里模型包的展示顺序与中文名；大小取 download.PACKS 里的声明。
+PACK_ORDER = ("ncnn", "apisr")
+PACK_LABELS = {
+    "ncnn": "Real-CUGAN 模型",
+    "apisr": "APISR 模型",
+}
+
+
+def _pack_size(key: str) -> float:
+    pack = upscale.PACK_BY_KEY.get(key)
+    size = getattr(pack, "size", 0) or 0
+    return size / 1024 / 1024
+
 #: 模型 tags -> 下拉框里的彩色短标签（文字, 角色）。
 TAG_PILLS: dict[str, tuple[str, str]] = {
     "detail": ("画质", "warn"),
@@ -71,8 +84,9 @@ class ModelInstallWorker(QThread):
     succeeded = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, pack_key: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._pack_key = pack_key
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -81,12 +95,13 @@ class ModelInstallWorker(QThread):
     def run(self) -> None:  # noqa: D401 - QThread 入口
         target = Path(os.environ.get("IMAGEFORGE_MODELS_DIR") or upscale.default_models_root())
         try:
-            root = upscale.download_models(
+            installed = upscale.download_pack(
+                self._pack_key,
                 target,
                 progress=lambda done, total: self.progressChanged.emit(done, total),
                 cancel=lambda: self._cancelled,
             )
-            self.succeeded.emit(str(root))
+            self.succeeded.emit(str(target) + ("（" + "、".join(installed) + "）" if installed else ""))
         except upscale.DownloadCancelled:
             self.failed.emit("已取消下载")
         except upscale.DownloadError as exc:
@@ -107,6 +122,7 @@ class UpscalePanel(QWidget):
         self._models = list(upscale.models_sorted())
         self._source_size: tuple[int, int] | None = None
         self._install_worker: ModelInstallWorker | None = None
+        self._install_pack: str = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -154,12 +170,19 @@ class UpscalePanel(QWidget):
         card.body.addWidget(header)
 
         self.install_text = QLabel(
-            f"第一次使用放大功能需要下载 Real-CUGAN 模型包（约 {upscale.MODELS_BYTES / 1024 / 1024:.0f} MB）。"
-            "下载一次即可，之后离线可用。"
+            "放大模型不随应用打包，第一次使用对应模型时再下载（下载一次，之后离线可用）。"
+            "Real-CUGAN 走 Vulkan/CPU，APISR 走 DirectML GPU；也可以从文件导入 zip。"
         )
         self.install_text.setObjectName("Caption")
         self.install_text.setWordWrap(True)
         card.body.addWidget(self.install_text)
+
+        self.install_rows_host = QWidget()
+        self.install_rows = QVBoxLayout(self.install_rows_host)
+        self.install_rows.setContentsMargins(0, 0, 0, 0)
+        self.install_rows.setSpacing(tokens.SPACE["xs"])
+        card.body.addWidget(self.install_rows_host)
+        self._install_buttons: dict[str, tuple[QPushButton, QPushButton]] = {}
 
         self.install_progress = QProgressBar()
         self.install_progress.setObjectName("AppProgress")
@@ -170,27 +193,55 @@ class UpscalePanel(QWidget):
         self.install_progress.setVisible(False)
         card.body.addWidget(self.install_progress)
 
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(tokens.SPACE["sm"])
-        self.download_btn = QPushButton("下载模型")
-        self.download_btn.setProperty("variant", "primary")
-        self.download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.download_btn.clicked.connect(self._start_download)
-        self.install_file_btn = QPushButton("从文件安装…")
-        self.install_file_btn.setProperty("variant", "secondary")
-        self.install_file_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.install_file_btn.clicked.connect(self._install_from_file)
-        row.addWidget(self.download_btn)
-        row.addWidget(self.install_file_btn)
-        row.addStretch(1)
-        card.body.addLayout(row)
-
         self.install_hint = QLabel("")
         self.install_hint.setObjectName("Caption")
         self.install_hint.setWordWrap(True)
         card.body.addWidget(self.install_hint)
+        self._rebuild_install_rows()
         return card
+
+    def _rebuild_install_rows(self) -> None:
+        for button, _in_file in self._install_buttons.values():
+            button.deleteLater()
+            _in_file.deleteLater()
+        self._install_buttons.clear()
+        while self.install_rows.count():
+            item = self.install_rows.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        for key in PACK_ORDER:
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(tokens.SPACE["sm"])
+
+            label = QLabel(f"{PACK_LABELS[key]} · 约 {_pack_size(key):.0f} MB")
+            label.setProperty("role", "caption")
+            layout.addWidget(label, 1)
+
+            missing = not upscale.pack_ready(key)
+            download = QPushButton("下载")
+            download.setProperty("variant", "primary")
+            download.setFixedHeight(28)
+            download.setCursor(Qt.CursorShape.PointingHandCursor)
+            download.setEnabled(missing)
+            download.clicked.connect(lambda _checked=False, k=key: self._start_download(k))
+            layout.addWidget(download)
+
+            local = QPushButton("从文件…")
+            local.setProperty("variant", "secondary")
+            local.setFixedHeight(28)
+            local.setCursor(Qt.CursorShape.PointingHandCursor)
+            local.setEnabled(missing)
+            local.clicked.connect(lambda _checked=False, k=key: self._install_from_file(k))
+            layout.addWidget(local)
+
+            if not missing:
+                label.setText(label.text().replace(" · 约", " · 已安装 · 约"))
+            self.install_rows.addWidget(row)
+            self._install_buttons[key] = (download, local)
 
     def _build_model_card(self) -> Card:
         card = Card(self.theme, padding=14, spacing=10)
@@ -222,7 +273,7 @@ class UpscalePanel(QWidget):
         self.device = SegmentedControl(self.theme, DEVICE_OPTIONS, height=30)
         self.device.valueChanged.connect(lambda _v: self._emit())
         card.body.addWidget(self.device)
-        device_hint = QLabel("自动 = 优先 GPU（Vulkan），不可用时回退 CPU")
+        device_hint = QLabel("自动 = 优先 GPU（DirectML / Vulkan），不可用时回退 CPU")
         device_hint.setObjectName("Caption")
         device_hint.setWordWrap(True)
         card.body.addWidget(device_hint)
@@ -364,6 +415,11 @@ class UpscalePanel(QWidget):
             current = model.default_denoise
         options = [(str(level), upscale.DENOISE_LABELS[level]) for level in levels]
         self.denoise_group.set_options(options)
+        if not options:
+            # ONNX（APISR）模型没有降噪档位，隐藏整行。
+            self.denoise_label.setVisible(False)
+            self.denoise_group.setVisible(False)
+            return
         if current not in levels:
             current = levels[0]
         self.denoise_group.set_value(str(current))
@@ -396,14 +452,28 @@ class UpscalePanel(QWidget):
     def _sync_visibility(self) -> None:
         mode = self.mode.value()
         scale_mode = mode == "scale"
-        for widget in (self.scale_label, self.scale_group, self.scale_hint):
-            widget.setVisible(scale_mode)
-        self.scale_hint.setVisible(scale_mode and self._current_scale() > 4)
+        model = self.model
+        is_onnx = model.backend == "onnx"
+        scale = self._current_scale()
+        if is_onnx:
+            self.scale_hint.setText("APISR 固定 4× 输出，其它倍率会先在 4× 放大后缩放回目标尺寸")
+            hint_visible = scale_mode and scale != 4
+        else:
+            self.scale_hint.setText("8× 及以上由多轮模型放大组合，耗时成倍增加")
+            hint_visible = scale_mode and scale > 4
+        self.scale_hint.setVisible(hint_visible)
         for widget in (self.preset_label, self.preset_group):
             widget.setVisible(not scale_mode)
         self.custom_row.setVisible(not scale_mode and self.preset_group.value() == CUSTOM)
-        model = self.model
-        self.model_note.setText(model.description)
+        self.denoise_label.setVisible(not is_onnx)
+        self.denoise_group.setVisible(not is_onnx)
+        self.tta_row.setVisible(not is_onnx)
+        note = model.description
+        if not upscale.model_ready(model.id):
+            pack = upscale.PACK_BY_KEY.get(model.pack)
+            size = (getattr(pack, "size", 0) or 0) / 1024 / 1024
+            note = f"{note}（需先下载 {PACK_LABELS.get(model.pack, '模型包')}，约 {size:.0f} MB）"
+        self.model_note.setText(note)
         self.estimate_label.setText(self._estimate_text())
 
     def _estimate_text(self) -> str:
@@ -453,7 +523,12 @@ class UpscalePanel(QWidget):
 
     # ------------------------------------------------------- 模型安装 --
     def is_ready(self) -> bool:
-        return upscale.models_ready()
+        """任意一个模型包已安装（放大功能整体可用）。"""
+        return any(upscale.pack_ready(key) for key in PACK_ORDER)
+
+    def selected_ready(self) -> bool:
+        """当前下拉框选中的模型所需的模型包是否就绪。"""
+        return upscale.model_ready(self.model_box.value() or upscale.DEFAULT_MODEL_ID)
 
     def _sync_install_state(self) -> None:
         ready = self.is_ready()
@@ -462,19 +537,31 @@ class UpscalePanel(QWidget):
             card.setVisible(ready)
         if not ready:
             self.install_hint.setText(f"安装位置：{upscale.models_location_hint()}")
-        if ready != self._ready_state:
-            self._ready_state = ready
+        elif self._install_worker is None:
+            self.install_hint.setText("")
+        states = tuple(upscale.pack_ready(key) for key in PACK_ORDER)
+        if states != self._ready_state:
+            self._ready_state = states
+            self._rebuild_install_rows()
             self.modelsChanged.emit(ready)
+        self._refresh_install_buttons()
 
-    def _start_download(self) -> None:
+    def _refresh_install_buttons(self) -> None:
+        busy = self._install_worker is not None
+        for key, (download, local) in self._install_buttons.items():
+            missing = not upscale.pack_ready(key)
+            download.setEnabled(missing and not busy)
+            local.setEnabled(missing and not busy)
+
+    def _start_download(self, pack_key: str) -> None:
         if self._install_worker is not None:
             return
-        self.download_btn.setEnabled(False)
-        self.install_file_btn.setEnabled(False)
+        self._install_pack = pack_key
+        self._refresh_install_buttons()
         self.install_progress.setVisible(True)
         self.install_progress.setValue(0)
-        self.install_hint.setText("正在连接…")
-        worker = ModelInstallWorker(self)
+        self.install_hint.setText(f"正在下载 {PACK_LABELS.get(pack_key, pack_key)}…")
+        worker = ModelInstallWorker(pack_key, self)
         worker.progressChanged.connect(self._on_download_progress)
         worker.succeeded.connect(self._on_download_done)
         worker.failed.connect(self._on_download_failed)
@@ -482,39 +569,41 @@ class UpscalePanel(QWidget):
         worker.start()
 
     def _on_download_progress(self, done: int, total: int) -> None:
-        total = total or upscale.MODELS_BYTES
-        self.install_progress.setValue(int(done / max(1, total) * 100))
+        if not total:
+            total = int(_pack_size(self._install_pack) * 1024 * 1024)
+        total = total or 1
+        self.install_progress.setValue(int(done / total * 100))
         self.install_hint.setText(f"正在下载 {done / 1048576:.1f} / {total / 1048576:.1f} MB")
 
-    def _on_download_done(self, root: str) -> None:
-        self._finish_install(f"模型已安装到 {root}")
+    def _on_download_done(self, message: str) -> None:
+        self._finish_install(f"模型已安装：{message}")
 
     def _on_download_failed(self, message: str) -> None:
         self._install_worker = None
-        self.download_btn.setEnabled(True)
-        self.install_file_btn.setEnabled(True)
         self.install_progress.setVisible(False)
         self.install_hint.setText(message)
+        self._refresh_install_buttons()
 
-    def _install_from_file(self) -> None:
+    def _install_from_file(self, pack_key: str | None = None) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择模型包", "", "Zip 压缩包 (*.zip)")
         if not path:
             return
         QGuiApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            root = upscale.install_archive(Path(path))
+            installed = upscale.install_archive(Path(path))
         except upscale.DownloadError as exc:
             self.install_hint.setText(str(exc))
             return
         finally:
             QGuiApplication.restoreOverrideCursor()
-        self._finish_install(f"模型已安装到 {root}")
+        names = "、".join(PACK_LABELS.get(key, key) for key in installed) or "模型"
+        self._finish_install(f"{names} 已安装")
+        if pack_key and not upscale.pack_ready(pack_key):
+            self.install_hint.setText("该 zip 里没有所选模型的包，请在右侧手动下载")
 
     def _finish_install(self, message: str) -> None:
         self._install_worker = None
         self.install_progress.setVisible(False)
-        self.download_btn.setEnabled(True)
-        self.install_file_btn.setEnabled(True)
         self.install_hint.setText(message)
         self._sync_install_state()
         self._sync_visibility()
@@ -550,6 +639,7 @@ class UpscalePanel(QWidget):
         mode = self.mode.value() or "scale"
         preset = self.preset_group.value() or "1080p"
         denoise = self.denoise_group.value()
+        model = self.model
         return upscale.UpscaleOptions(
             model_id=self.model_box.value() or upscale.DEFAULT_MODEL_ID,
             device=self.device.value() or "auto",
@@ -559,6 +649,6 @@ class UpscalePanel(QWidget):
             custom_width=int(self.custom_w.value()),
             custom_height=int(self.custom_h.value()),
             denoise=int(denoise) if denoise not in (None, "") else None,
-            tta=self.tta_row.value(),
+            tta=bool(self.tta_row.value()) and model.backend != "onnx",
             output_format=self.format_group.value() or "keep",
         )

@@ -65,6 +65,8 @@ COMMON_EXCLUDES = [
 ]
 
 QT_EXCLUDES = [
+    "onnxruntime.transformers", "onnxruntime.quantization", "onnxruntime.tools",
+    "onnxruntime.test", "onnxruntime.training",
     "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineQuick",
     "PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtQml", "PySide6.QtQuick",
     "PySide6.QtQuickWidgets", "PySide6.QtQuickControls2", "PySide6.Qt3DCore",
@@ -116,12 +118,29 @@ def main() -> int:
         "--workpath", str(BUILD / "work"),
         "--specpath", str(BUILD),
     ]
-    excludes = COMMON_EXCLUDES + ([] if legacy else QT_EXCLUDES)
+    excludes = list(COMMON_EXCLUDES) + ([] if legacy else QT_EXCLUDES)
+    if not legacy:
+        # ONNX Runtime 依赖 numpy（APISR 推理要用），Qt 版不能排除。
+        excludes = [name for name in excludes if name != "numpy"]
     if legacy:
         args.extend(["--collect-all", "tkinterdnd2"])
     else:
-        # 模型权重不打包：2.3.0 起改为首次使用时按需下载（约 44 MB），
-        # exe 因此从 ~96 MB 降到 ~45 MB。
+        # APISR 走 ONNX Runtime（DirectML）推理；onnx_runner 里是延迟导入，
+        # PyInstaller 静态分析看不到，这里显式收集运行库与官方 provider DLL。
+        args.extend(
+            [
+                "--hidden-import",
+                "onnxruntime",
+                "--hidden-import",
+                "onnxruntime.capi._pybind_state",
+                "--collect-binaries",
+                "onnxruntime",
+                "--collect-submodules",
+                "onnxruntime.capi",
+            ]
+        )
+        # 模型权重不打包：2.3.0 起 Real-CUGAN 改为按需下载（约 44 MB），
+        # 2.4.0 起 APISR ONNX 同样按需下载（约 59 MB）。
         if (ROOT / "dist" / "models" / "realcugan-ncnn-models.zip").is_file():
             print("提示：模型包将在 release 资产中单独上传，不打进 exe")
     for name in excludes:

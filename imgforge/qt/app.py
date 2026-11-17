@@ -72,9 +72,17 @@ def _run_selftest(require_models: bool = False) -> int:
     lines: list[str] = [f"ImageForge {__version__} self-test"]
     ok = True
     try:
-        models = upscale.models_ready()
-        lines.append(f"models: ready={models} root={upscale.models_location_hint()}")
-        if not models:
+        root = upscale.weights_root()
+        packs = {key: upscale.pack_ready(key) for key in ("ncnn", "apisr")}
+        lines.append(f"models: root={root}")
+        lines.append("packs: " + ", ".join(f"{key}={value}" for key, value in packs.items()))
+        try:
+            from ..upscale import onnx_runner
+
+            lines.append("onnx: " + onnx_runner.describe_backend())
+        except Exception as exc:  # noqa: BLE001 - 自检报告而不中断
+            lines.append(f"onnx: 不可用（{exc}）")
+        if not any(packs.values()):
             lines.append("提示: 未安装放大模型，可在界面「下载模型」，或运行 ImageForge.exe --install-models")
             if require_models:
                 ok = False
@@ -82,10 +90,10 @@ def _run_selftest(require_models: bool = False) -> int:
             _write_selftest(lines)
             print("\n".join(lines))
             return 0 if ok else 1
-        exe = upscale.ncnn_exe()
-        lines.append(f"ncnn exe: {exe} exists={exe.exists()}")
-        ok = ok and exe.exists()
-        root = upscale.weights_root()
+        if packs["ncnn"]:
+            exe = upscale.ncnn_exe()
+            lines.append(f"ncnn exe: {exe} exists={exe.exists()}")
+            ok = ok and exe.exists()
         lines.append(f"weights: {root} exists={root.is_dir()}")
         ok = ok and root.is_dir()
         with tempfile.TemporaryDirectory(prefix="imageforge-selftest-") as tmp:
@@ -96,16 +104,22 @@ def _run_selftest(require_models: bool = False) -> int:
                     if (x + y) % 2 == 0:
                         image.putpixel((x, y), (40, 120, 220, 255))
             image.save(src)
+            if packs["ncnn"]:
+                model_id, scale, denoise = "cugan-se", 2, 0
+            else:
+                model_id, scale, denoise = "apisr-grl", 4, None
+            lines.append(f"probe model: {model_id} scale={scale}")
             result = upscale.upscale_file(
                 src,
-                upscale.UpscaleOptions(model_id="cugan-se", device="cpu", scale=2, denoise=0),
+                upscale.UpscaleOptions(model_id=model_id, device="auto", scale=scale, denoise=denoise),
                 out_root=Path(tmp) / "out",
             )
             lines.append(
                 f"upscale: ok={result.ok} size={result.width}x{result.height} "
                 f"seconds={result.seconds:.1f} message={result.message}"
             )
-            ok = ok and result.ok and (result.width, result.height) == (128, 128)
+            expected = 128 if model_id == "cugan-se" else 256
+            ok = ok and result.ok and (result.width, result.height) == (expected, expected)
             if result.warnings:
                 lines.append("warnings: " + " / ".join(result.warnings))
     except Exception:  # noqa: BLE001 - 自检要报告任何异常而不是弹窗
@@ -127,21 +141,33 @@ def _write_selftest(lines: list[str]) -> None:
         pass
 
 
-def _run_install_models() -> int:
+def _run_install_models(pack: str = "all") -> int:
     """无界面下载放大模型（供脚本/首启配置使用）。"""
     from .. import upscale
 
-    try:
-        root = upscale.download_models(
-            progress=lambda done, total: print(
-                f"\r下载中 {done / 1048576:.1f}/{total / 1048576:.1f} MB", end="", flush=True
+    keys = ["ncnn", "apisr"] if pack in ("all", "") else [pack]
+    keys = [key for key in keys if not upscale.pack_ready(key)]
+    if not keys:
+        print("模型已安装，无需下载")
+        return 0
+    ok = True
+    for key in keys:
+        label = upscale.PACK_BY_KEY[key].label
+        print(f"下载 {label} …")
+        try:
+            upscale.download_pack(
+                key,
+                progress=lambda done, total, name=label: print(
+                    f"\r{name} {done / 1048576:.1f}/{total / 1048576:.1f} MB", end="", flush=True
+                ),
             )
-        )
-    except Exception as exc:  # noqa: BLE001 - 命令行要给出可读错误
-        print(f"\n下载失败：{exc}")
-        return 1
-    print(f"\n模型已安装到 {root}")
-    return 0 if upscale.models_ready() else 1
+        except Exception as exc:  # noqa: BLE001 - 命令行要给出可读错误
+            print(f"\n下载失败：{exc}")
+            ok = False
+            continue
+        print(f"\n{label} 已安装到 {upscale.weights_root()}")
+        ok = ok and upscale.pack_ready(key)
+    return 0 if ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -156,13 +182,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--install-models",
-        action="store_true",
-        help="下载放大模型后退出（无界面，约 44 MB）",
+        nargs="?",
+        const="all",
+        choices=["all", "ncnn", "apisr"],
+        help="下载放大模型后退出（ncnn 约 44 MB，apisr 约 59 MB；默认 all）",
     )
     args, qt_args = parser.parse_known_args(argv if argv is not None else sys.argv[1:])
 
     if args.install_models:
-        return _run_install_models()
+        return _run_install_models(args.install_models)
     if args.check:
         return _run_selftest(require_models=args.require_models)
 
