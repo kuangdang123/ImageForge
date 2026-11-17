@@ -39,8 +39,8 @@ DEFAULTS: Dict[str, Any] = {
     "theme": "light",
     "window": "1080x600",
     "last_dir": "",
-    "mode": "convert",            # convert | upscale
-    # 分辨率放大（Real-CUGAN ncnn）
+    "mode": "convert",            # convert | upscale | video
+    # 分辨率放大（Real-CUGAN ncnn / APISR ONNX）
     "upscale_model": "cugan-pro",
     "upscale_device": "auto",     # auto | gpu | cpu
     "upscale_mode": "scale",      # scale | target
@@ -51,6 +51,16 @@ DEFAULTS: Dict[str, Any] = {
     "upscale_denoise": None,      # None = 用模型默认档
     "upscale_tta": False,
     "upscale_format": "keep",
+    # 视频转换（ffmpeg）
+    "video_target": "mp4",
+    "video_quality": 88,
+    "video_resolution": "source",  # source | 720p | 1080p | 1440p | 2160p
+    "video_fps": 15,               # GIF 帧率
+    "video_start": 0,              # 起点（秒）
+    "video_duration": 0,           # 时长（秒，0 = 整段）
+    "video_loop": True,            # GIF 循环
+    "video_audio": True,
+    "video_overwrite": False,
 }
 
 

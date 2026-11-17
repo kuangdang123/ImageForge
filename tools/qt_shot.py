@@ -43,6 +43,12 @@ def main() -> int:
     if "--upscale-done" in args:
         mode = "upscale-done"
         out = ROOT / "tmp" / "shots" / f"qt_native_upscale_done_{theme_name}.png"
+    if "--video" in args:
+        mode = "video"
+        out = ROOT / "tmp" / "shots" / f"qt_native_video_{theme_name}.png"
+    if "--video-done" in args:
+        mode = "video-done"
+        out = ROOT / "tmp" / "shots" / f"qt_native_video_done_{theme_name}.png"
     out = out if out.is_absolute() else ROOT / out
     out.parent.mkdir(parents=True, exist_ok=True)
     settings_file = Path(os.environ["IMAGEFORGE_HOME"]) / "settings.json"
@@ -57,7 +63,7 @@ def main() -> int:
     settings = Settings.load()
     settings["theme"] = theme_name
     settings["target"] = "ico"
-    if "--convert" in args:
+    if "--convert" in args or "--video-done" in args:
         out_dir = ROOT / "tmp" / "shot_out"
         out_dir.mkdir(parents=True, exist_ok=True)
         settings["out_mode"] = "folder"
@@ -94,7 +100,29 @@ def main() -> int:
             app.processEvents()
             time.sleep(0.01)
 
-    if mode == "convert":
+    if mode.startswith("video"):
+        window.nav.set_value("video", emit=True)
+        settle(0.3)
+        page = window.video_page
+        clip = SAMPLES / "clip.mp4"
+        if clip.is_file():
+            page.add_paths([clip])
+            deadline = time.monotonic() + 25
+            while time.monotonic() < deadline and page._pending_probe:
+                app.processEvents()
+                time.sleep(0.01)
+        settle(0.4)
+        if mode == "video-done":
+            page.panel.target_group.set_value("gif", emit=True)
+            settle(0.2)
+            page.start()
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline and page.is_running():
+                app.processEvents()
+                time.sleep(0.02)
+            settle(0.6)
+        window.grab().save(str(out))
+    elif mode == "convert":
         window.start_conversion()
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline and window._worker is not None:

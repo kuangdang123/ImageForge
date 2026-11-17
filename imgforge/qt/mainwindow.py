@@ -37,13 +37,18 @@ from .queueview import FileModel, FilePanel, QueueItem, THUMB_SIZE
 from .settings_panel import SettingsPanel
 from .theme import Theme
 from .upscale_panel import UpscalePanel
+from .video_page import VideoPage
 from .widgets import ElidedLabel, MiniProgress, SegmentedControl, Toast
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 OUT_MODE_OPTIONS = [("same", "源文件旁"), ("folder", "指定文件夹")]
-MODE_OPTIONS = [("convert", "格式转换"), ("upscale", "分辨率放大")]
-MODE_NOUNS = {"convert": ("转换", "待转换", "转换中", "已转换"), "upscale": ("放大", "待放大", "放大中", "已放大")}
+MODE_OPTIONS = [("convert", "格式转换"), ("upscale", "分辨率放大"), ("video", "视频转换")]
+MODE_NOUNS = {
+    "convert": ("转换", "待转换", "转换中", "已转换"),
+    "upscale": ("放大", "待放大", "放大中", "已放大"),
+    "video": ("转换", "待转换", "转换中", "已转换"),
+}
 THEME_CYCLE = ["system", "light", "dark"]
 THEME_LABELS = {"system": "跟随系统", "light": "浅色", "dark": "深色"}
 THEME_ICONS = {"system": "monitor", "light": "sun", "dark": "moon"}
@@ -214,7 +219,7 @@ class MainWindow(QMainWindow):
         self._save_timer.setInterval(350)
         self._save_timer.timeout.connect(self._flush_settings)
 
-        self.setWindowTitle("ImageForge · 图片格式转换与超分")
+        self.setWindowTitle("ImageForge · 图片转换 · 超分 · 视频")
         self.setWindowIcon(QIcon(str(ASSETS / "app.ico")))
         self.setAcceptDrops(True)
         self.setMinimumSize(1040, 660)
@@ -236,9 +241,25 @@ class MainWindow(QMainWindow):
 
         outer.addLayout(self._build_header())
         outer.addLayout(self._build_nav())
-        outer.addLayout(self._build_command_bar())
-        outer.addLayout(self._build_body(), 1)
-        outer.addWidget(self._build_footer())
+
+        self.command_widget = QWidget()
+        self.command_widget.setLayout(self._build_command_bar())
+        outer.addWidget(self.command_widget)
+
+        self.image_page = QWidget()
+        image_layout = QVBoxLayout(self.image_page)
+        image_layout.setContentsMargins(0, 0, 0, 0)
+        image_layout.setSpacing(14)
+        image_layout.addLayout(self._build_body(), 1)
+        image_layout.addWidget(self._build_footer())
+
+        # 视频页自带的 Toast 已经覆盖在页面上，主窗不再重复弹一次。
+        self.video_page = VideoPage(self.theme, self.settings)
+
+        self.content_stack = QStackedWidget()
+        self.content_stack.addWidget(self.image_page)
+        self.content_stack.addWidget(self.video_page)
+        outer.addWidget(self.content_stack, 1)
 
         self.toast = Toast(central, self.theme)
 
@@ -247,7 +268,7 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(2, 0, 2, 0)
         row.setSpacing(8)
         self.nav = SegmentedControl(self.theme, MODE_OPTIONS, height=34)
-        self.nav.setFixedWidth(260)
+        self.nav.setFixedWidth(390)
         self.nav.valueChanged.connect(self._on_mode_changed)
         row.addWidget(self.nav)
         row.addStretch(1)
@@ -290,7 +311,7 @@ class MainWindow(QMainWindow):
         title_row.addWidget(title)
         title_row.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
         title_row.addStretch(1)
-        subtitle = QLabel("格式转换 · 多尺寸 ICO · 分辨率放大")
+        subtitle = QLabel("图片格式转换 · 多尺寸 ICO · 超分放大 · 视频转换")
         subtitle.setObjectName("Caption")
         titles.addLayout(title_row)
         titles.addWidget(subtitle)
@@ -446,6 +467,7 @@ class MainWindow(QMainWindow):
             shortcut = QShortcut(QKeySequence(keys), self)
             shortcut.activated.connect(slot)
         self.nav.set_value(self.mode)
+        self._apply_mode_layout()
         self._refresh_mode_texts()
 
     # ------------------------------------------------------------- 主题 --
@@ -478,15 +500,23 @@ class MainWindow(QMainWindow):
         self._update_theme_button()
         self.model.refresh_all()
         self.file_panel.list.viewport().update()
+        if hasattr(self, "video_page"):
+            self.video_page.refresh_icons()
 
     # ------------------------------------------------------------- 添加 --
     def add_files(self) -> None:
+        if self.mode == "video":
+            self.video_page.add_files()
+            return
         patterns = " ".join(f"*{ext}" for ext in sorted(converter.INPUT_EXTS))
         paths, _ = QFileDialog.getOpenFileNames(self, "选择图片", self._start_dir(), f"图片文件 ({patterns});;所有文件 (*.*)")
         if paths:
             self.add_paths([Path(p) for p in paths])
 
     def choose_folder(self) -> None:
+        if self.mode == "video":
+            self.video_page.add_folder()
+            return
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹", self._start_dir())
         if not folder:
             return
@@ -509,6 +539,9 @@ class MainWindow(QMainWindow):
             self.add_paths(picker.selected_paths(), autostart=picker.start_requested())
 
     def paste(self) -> None:
+        if self.mode == "video":
+            self.toast.show_message("视频页请点「添加视频」", "info", 1800)
+            return
         data = QApplication.clipboard().mimeData()
         if data.hasUrls():
             paths = [Path(url.toLocalFile()) for url in data.urls() if url.isLocalFile()]
@@ -618,6 +651,8 @@ class MainWindow(QMainWindow):
             self._refresh_idle_status()
 
     def _refresh_idle_status(self) -> None:
+        if self.mode == "video":
+            return
         items = self.model.items
         total = len(items)
         if self.mode == "upscale" and not self.upscale_panel.selected_ready():
@@ -708,7 +743,11 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- 模式 --
     def _is_busy(self) -> bool:
-        return self._worker is not None or self._upscale_worker is not None
+        return (
+            self._worker is not None
+            or self._upscale_worker is not None
+            or (hasattr(self, "video_page") and self.video_page.is_running())
+        )
 
     def _on_mode_changed(self, mode: str) -> None:
         if self._is_busy():
@@ -718,10 +757,26 @@ class MainWindow(QMainWindow):
         self.mode = mode
         self.settings["mode"] = mode
         self._save_timer.start()
-        self.panel_stack.setCurrentWidget(self.settings_panel if mode == "convert" else self.upscale_panel)
+        is_video = mode == "video"
+        self.content_stack.setCurrentWidget(self.video_page if is_video else self.image_page)
+        self.command_widget.setVisible(not is_video)
+        if not is_video:
+            self.panel_stack.setCurrentWidget(
+                self.settings_panel if mode == "convert" else self.upscale_panel
+            )
         self._refresh_mode_texts()
         self._sync_state()
         self._refresh_idle_status()
+
+    def _apply_mode_layout(self) -> None:
+        """启动时按保存的模式决定显示哪一页。"""
+        is_video = self.mode == "video"
+        self.content_stack.setCurrentWidget(self.video_page if is_video else self.image_page)
+        self.command_widget.setVisible(not is_video)
+        if not is_video:
+            self.panel_stack.setCurrentWidget(
+                self.settings_panel if self.mode == "convert" else self.upscale_panel
+            )
 
     def _refresh_mode_texts(self) -> None:
         verb, pending_word, running_word, done_word = MODE_NOUNS.get(self.mode, MODE_NOUNS["convert"])
@@ -729,7 +784,9 @@ class MainWindow(QMainWindow):
         self.file_panel.set_hint("双击预览 · Delete 移除")
 
     def start_current(self) -> None:
-        if self.mode == "upscale":
+        if self.mode == "video":
+            self.video_page.start()
+        elif self.mode == "upscale":
             self.start_upscale()
         else:
             self.start_conversion()
@@ -789,6 +846,9 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def cancel_conversion(self) -> None:
+        if self.mode == "video":
+            self.video_page.cancel()
+            return
         if self._worker is not None:
             self._worker.cancel()
             self.status_label.setText("正在取消…")
@@ -955,6 +1015,9 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- 拖拽 --
     def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if self.mode == "video":
+            event.ignore()
+            return
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
             self.file_panel.drop_zone.set_active(True)
@@ -963,6 +1026,9 @@ class MainWindow(QMainWindow):
         self.file_panel.drop_zone.set_active(False)
 
     def dropEvent(self, event) -> None:  # noqa: N802
+        if self.mode == "video":
+            event.ignore()
+            return
         self.file_panel.drop_zone.set_active(False)
         files: list[Path] = []
         folders: list[Path] = []
@@ -1006,6 +1072,8 @@ class MainWindow(QMainWindow):
         if self._upscale_worker is not None:
             self._upscale_worker.cancel()
             self._upscale_worker.wait(5000)
+        if hasattr(self, "video_page"):
+            self.video_page.close_cleanup()
         self.settings["window"] = f"{self.width()}x{self.height()}"
         self.settings.save()
         self._probe_pool.clear()

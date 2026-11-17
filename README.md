@@ -1,8 +1,8 @@
-# ImageForge 2.4.0
+# ImageForge 2.5.0
 
-把 PNG / JPG / WebP / BMP / GIF / TIFF / AVIF 互转、一键生成**多尺寸 Windows 图标**，还能把图片**放大 2–32 倍**、用 Real-CUGAN（Vulkan）或 APISR（DirectML GPU）超分到 1080p / 2K / 4K / 8K 的桌面小工具。
+把 PNG / JPG / WebP / BMP / TIFF / AVIF 互转、一键生成**多尺寸 Windows 图标**，把图片**放大 2–32 倍**（Real-CUGAN Vulkan / APISR DirectML），还能把视频在 **MP4 / MKV / MOV / WebM / AVI / GIF** 之间互转的桌面小工具。
 
-界面用 PySide6（Qt 6）编写：原生控件、明暗两套主题、1.5× 高 DPI 下依然锐利；顶部导航切换「格式转换」与「分辨率放大」，两页共用同一个待处理队列。所有偏好（模式、格式、尺寸、质量、模型、主题、窗口大小）下次启动自动恢复。
+界面用 PySide6（Qt 6）编写：原生控件、明暗两套主题、1.5× 高 DPI 下依然锐利；顶部导航切换「格式转换」「分辨率放大」「视频转换」，三页共用同一套主题、拖拽与队列交互。所有偏好（模式、格式、尺寸、质量、模型、主题、窗口大小）下次启动自动恢复。
 所有处理都在本机完成，不依赖浏览器、不上传文件、不需要联网（模型首次下载除外）。
 
 **[下载发布版](https://github.com/kuangdang123/ImageForge/releases/latest)** —— 单个 `ImageForge.exe`，不需要装 Python。
@@ -18,6 +18,10 @@
 
 ![放大完成](docs/screenshots/qt-upscale-done.png)
 
+![视频转换](docs/screenshots/qt-video-light.png)
+
+![视频转 GIF 完成](docs/screenshots/qt-video-done.png)
+
 ![从文件夹挑图](docs/screenshots/qt-picker.png)
 
 ![预览与 ICO 尺寸条](docs/screenshots/qt-preview.png)
@@ -29,11 +33,12 @@
 ## 功能
 
 - **多尺寸 ICO**：一次输出 16 / 24 / 32 / 48 / 64 / 128 / 256 七档，每档独立重采样，不是把一张大图塞进去。
-- **常用格式互转**：PNG、JPG、WebP、BMP、GIF、TIFF、AVIF 任意方向。
+- **图片格式互转**：PNG、JPG、WebP、BMP、TIFF、AVIF 任意方向；GIF 仍可作为输入（转成静态格式或 WebP 动图），但不再作为图片输出格式。
 - **分辨率放大**：两套模型共 6 档，模型下拉按性能排序、每项带彩色短标签（画质 / 动漫 / 均衡 / 最快 / 轻量）方便一眼挑：
   - **Real-CUGAN**（ncnn + Vulkan）：Pro（细节最强）/ SE（均衡通用）/ NoSE（最快最轻）——免显卡、CPU 也能跑；
   - **APISR**（ONNX + DirectML GPU）：GRL（超轻量最快）/ RRDB（CVPR 2024 论文主模型）/ DAT（画质最好）——面向动画截图，GPU 上比 CPU 快 5–9 倍，固定 4× 输出。
   支持按倍数（`1×`–`32×`，8× 及以上由多轮模型组合）或按目标尺寸（720p / 1080p / 2K / 4K / 8K / 自定义）放大；设备默认 `自动`（优先 GPU，不可用时回退 CPU）。模型按需下载，不占 exe 体积。
+- **视频转换**：顶部「视频转换」页把 MP4 / MKV / MOV / WebM / AVI / GIF 互转，可改分辨率、帧率、截取片段；视频导 GIF 支持帧率、起点、时长与循环，需要系统里装好 ffmpeg。
 - **文件夹里挑图**：「选择文件夹…」打开图片列表，搜索、全选、Shift 连选，只把想要的几张加进队列。
 - **批处理**：拖入文件或文件夹、粘贴剪贴板图片、递归扫描子目录、保留目录结构。
 - **可控输出**：有损质量滑杆、WebP 无损、保留 EXIF / ICC、文件名后缀、输出到源文件旁边或指定文件夹；放大页还能选择保持原格式或另存 PNG / JPG / WebP。
@@ -45,11 +50,13 @@
 
 ### 方式一：下载现成的 exe（不需要 Python）
 
-从 [Releases](https://github.com/kuangdang123/ImageForge/releases/latest) 下载 `ImageForge.exe`（约 52 MB），放到任意文件夹双击即可。单文件、免安装，第一次启动会先解压到临时目录，慢一两秒。
+从 [Releases](https://github.com/kuangdang123/ImageForge/releases/latest) 下载 `ImageForge.exe`（约 87 MB），放到任意文件夹双击即可。单文件、免安装，第一次启动会先解压到临时目录，慢一两秒。
 
 > 2.3.0 起超分模型不再塞进 exe：第一次切到「分辨率放大」时，右侧卡片会让你点「下载模型」（约 44 MB，一次安装离线可用）；也可以下载 [`realcugan-ncnn-models.zip`](https://github.com/kuangdang123/ImageForge/releases/download/models-v1/realcugan-ncnn-models.zip) 后点「从文件安装…」。只做格式转换的话完全不需要模型。
 
 重复双击不会再开第二个窗口，而是把已经开着的窗口提到前面来。
+
+> 视频转换需要系统里有 **ffmpeg**。Windows 一句命令就能装：`winget install Gyan.FFmpeg`；装完不用重启，在视频页点「重新检测」或重开程序即可。只做图片功能的话完全不需要 ffmpeg。
 
 ### 方式二：从源码运行
 
@@ -223,7 +230,6 @@ Windows 图标不是「一张 256×256 的 PNG」那么简单：任务栏、标�
 | JPG | `.jpg` | | | 有损，照片首选 |
 | WebP | `.webp` | ✓ | ✓ | 高压缩，可无损 |
 | BMP | `.bmp` | | | 无压缩，兼容老系统 |
-| GIF | `.gif` | ✓ | ✓ | 256 色 |
 | TIFF | `.tiff` | ✓ | | LZW 压缩，印刷常用 |
 | AVIF | `.avif` | ✓ | | 新格式，压缩率高但较慢 |
 
@@ -233,7 +239,7 @@ Windows 图标不是「一张 256×256 的 PNG」那么简单：任务栏、标�
 
 - 目标格式不支持透明时（JPG / BMP），透明区域会按设定背景色压平，默认白色；
 - 动图转成静态格式时只保留第一帧，并在这行状态里给出提示；
-- 动图转 WebP / GIF 会保留所有帧。
+- 动图转 WebP 会保留所有帧；GIF 作为输出格式只在「视频转换」页提供，而且只用于视频。
 
 ## 设置保存在哪
 
@@ -257,6 +263,8 @@ ImageForge/
 │  │  ├─ mainwindow.py       主窗口：命令栏 / 队列 / 设置 / 底栏
 │  │  ├─ queueview.py        文件队列模型、委托、拖放
 │  │  ├─ settings_panel.py   格式转换的输出设置面板
+│  │  ├─ video_page.py       视频转换页（队列 / 拖拽 / 进度）
+│  │  ├─ video_panel.py      视频设置面板（格式 / 分辨率 / GIF 参数 / 音频）
 │  │  ├─ upscale_panel.py    分辨率放大的设置面板（模型下拉 / 设备 / 倍数 / 预设 / 降噪）
 │  │  ├─ preview.py          预览窗口与 ICO 尺寸条
 │  │  ├─ picker.py           从文件夹挑图
@@ -264,6 +272,7 @@ ImageForge/
 │  │  ├─ theme.py            主题、QSS、明暗切换
 │  │  ├─ widgets.py          卡片、胶囊、分段选择、开关、Toast…
 │  │  └─ icons.py            矢量图标
+│  ├─ video.py               视频探测 / 格式表 / ffmpeg 调度 / 批量转换
 │  ├─ upscale/               分辨率放大
 │  │  ├─ catalog.py          模型目录（Real-CUGAN 3 档 + APISR ONNX 3 档，性能排序、倍率、降噪档位）
 │  │  ├─ targets.py          目标尺寸预设与缩放计算
@@ -280,8 +289,8 @@ ImageForge/
 │  ├─ __main__.py            模块入口（无参数开 GUI）
 │  ├─ gui.py / widgets.py / theme.py / picker.py   1.x tkinter 界面
 │  └─ assets/                应用图标与 logo
-├─ samples/                  示例图片
-├─ tests/                    152 个单元测试（格式转换 + 挑图 + 单实例 + 设置 + 超分 + ONNX + 模型安装）
+├─ samples/                  示例图片与示例视频（clip.mp4）
+├─ tests/                    190 个单元测试（格式转换 + 挑图 + 单实例 + 设置 + 超分 + ONNX + 模型安装 + 视频）
 ├─ tools/
 │  ├─ make_icon.py           从 assets/logo.png 重新生成 assets/app.ico
 │  ├─ check_contrast.py      色板对比度校验
@@ -290,6 +299,7 @@ ImageForge/
 │  ├─ qt_smoke.py            离屏冒烟：添加 → 转换 → 预览 → 挑图
 │  ├─ qt_upscale_smoke.py    离屏冒烟：添加 → 切到放大页 → 真实推理一张
 │  ├─ qt_models_smoke.py     离屏冒烟：未安装模型 → 安装卡片 → 安装后恢复
+│  ├─ qt_video_smoke.py      离屏冒烟：视频页 → 转 GIF → 状态检查
 │  ├─ pack_models.py         打包 dist/models/realcugan-ncnn-models.zip 与 apisr-onnx-models.zip
 │  ├─ qt_shot.py             真实平台界面截图
 │  ├─ shot_window.py         按标题截取任意窗口（含打包后的 exe）
@@ -301,12 +311,13 @@ ImageForge/
 ## 开发
 
 ```powershell
-python -m unittest discover -s tests          # 152 个测试
+python -m unittest discover -s tests          # 190 个测试
 python tools/make_icon.py                     # 从 assets/logo.png 生成多尺寸 app.ico
 python tools/check_contrast.py                # 明暗两套色板 WCAG 校验
 python tools/qt_smoke.py                      # 离屏跑完整流程
 python tools/qt_settings_smoke.py             # 设置改动 → 关窗 → 重新加载是否保留
 python tools/qt_upscale_smoke.py              # 离屏冒烟：放大页 + 真实推理
+python tools/qt_video_smoke.py                # 离屏冒烟：视频页 → 转 GIF（需要 ffmpeg）
 python app2.pyw --check                       # 自检：模型是否存在 + 跑一张 64px 小图
 python app2.pyw --install-models              # 无界面下载放大模型（ncnn / apisr / all）
 python tools/pack_models.py                   # 打包 ncnn 与 apisr 模型 zip（上传到 models-v1 / models-v2）
@@ -316,7 +327,37 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 
 开发脚本把配置写到 `tmp/settings/`（通过 `IMAGEFORGE_HOME` 环境变量重定向），不会动 `%APPDATA%` 里的真实配置。
 
+## 视频转换
+
+顶部导航切到「视频转换」，页面换成视频队列：左侧待处理列表、右侧视频设置、底栏进度与「开始转换」。
+
+![视频转换页](docs/screenshots/qt-video-light.png)
+
+- **输出格式**：MP4 / MKV / MOV / WebM / AVI / GIF。MP4 兼容性最好（H.264 + AAC），WebM 体积小（VP9 + Opus），GIF 是无声音的循环动图，适合贴到聊天、文档或做预览图。
+- **画面**：可以保持原始分辨率，或缩到 720p / 1080p / 2K / 4K（只缩小不放大，不会拉伸变形）；GIF 还能设帧率（10–30 fps）、起点与时长、是否循环。
+- **音频**：非 GIF 输出默认保留原音轨；转 GIF 时自动忽略音频并给出提示。
+- **批量**：拖入多个视频或整个文件夹，队列逐条转换，进度条与状态逐张更新；`Esc` 取消，已完成的文件保留。
+- 视频探测用 `ffprobe`（缺省时回退 `ffmpeg -i`），缩略图由 ffmpeg 抽第一帧；没有 ffmpeg 时页面顶部会出现安装提示与「重新检测」按钮。
+
+常用命令：
+
+```powershell
+winget install Gyan.FFmpeg          # 安装 ffmpeg（只需一次）
+python app2.pyw --check             # 自检里会打印 ffmpeg 的实际路径
+```
+
+> 视频转换只在界面里提供；命令行目前专注图片（`python -m imgforge`）。输出文件默认放源视频旁边，重名自动编号，绝不覆盖原视频。
+
 ## 更新日志
+
+### 2.5.0
+
+- 图片页去掉「输出 GIF」：图片格式互转只负责静态图（PNG / JPG / WebP / BMP / TIFF / AVIF / ICO），动图请走视频页。GIF 作为输入仍然支持。
+- 新增「视频转换」页：MP4 / MKV / MOV / WebM / AVI / GIF 互转，支持分辨率、帧率、片段截取、音频开关与循环 GIF。
+- 新增 `imgforge/video.py`（ffprobe 探测、ffmpeg 编码、批量与取消）与 37 个视频单元测试，测试总数 190。
+- 顶部导航变三页（格式转换 / 分辨率放大 / 视频转换），切换时保留各自队列和设置；视频页有独立的进度条与开始按钮。
+- 新增 `tools/qt_video_smoke.py` 离屏冒烟；`--check` 自检增加 ffmpeg 路径。
+- 版本号 2.5.0。
 
 ### 2.4.0
 
@@ -404,9 +445,15 @@ python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约
 
 **设置会保存吗？** 会。输出格式、质量、ICO 尺寸与细节、其它开关、主题、窗口大小、上次目录都写在 `%APPDATA%\ImageForge\settings.json`，下次启动自动恢复；改完 0.35 秒就在后台落盘，即使直接关进程也不会丢。
 
-**动图不动了？** 只有 WebP 和 GIF 作为输出格式才支持动图，其它格式只取第一帧。
+**动图不动了？** 图片页只有 WebP 作为输出格式支持动图，其它图片格式只取第一帧；要把视频转成 GIF 请用「视频转换」页。
 
 **为什么 AVIF 慢？** 编码本身计算量大，批量时耐心等一下；急着用可以先转 WebP。
+
+**图片页为什么没有 GIF 输出了？** 图片格式互转现在只做静态图，GIF 动图交给「视频转换」页（视频 → GIF 更常见，也能设帧率和循环）；GIF 仍然可以作为输入，转成 PNG / WebP 等格式。
+
+**视频转换提示找不到 ffmpeg？** 视频相关功能依赖系统里的 ffmpeg：`winget install Gyan.FFmpeg` 装好后点视频页的「重新检测」；也可以用 `IMAGEFORGE_FFMPEG` 环境变量指定 `ffmpeg.exe` 的完整路径。`python app2.pyw --check` 会打印当前识别到的 ffmpeg 路径。
+
+**视频转 GIF 很慢 / 文件很大？** GIF 是 256 色调色板格式，长视频转 GIF 体积会明显膨胀。建议先把「起点 / 时长」截短，帧率降到 12–15，分辨率缩到 720p 以内。
 
 **exe 为什么是 87 MB？** 主要是 PySide6 的 Qt 运行库 + ONNX Runtime（DirectML 推理，已排除 WebEngine、QML、3D 等模块）；模型仍然不打进 exe，首次使用放大功能时再按包下载（Real-CUGAN 45.9 MB / APISR 59 MB）。1.x 的 tkinter 版本只有 23 MB。
 

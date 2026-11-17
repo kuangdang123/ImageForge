@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 # PyInstaller 的 VSVersionInfo 需要四段数字。
 VERSION_TUPLE = tuple(int(part) for part in __version__.split(".")) + (0,)

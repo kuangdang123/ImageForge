@@ -210,6 +210,15 @@ class Theme(QObject):
         QLabel#Success {{
             color: {c['success']};
         }}
+        QWidget#Banner {{
+            background: {c['warning_subtle']};
+            border: 1px solid {c['warning']};
+            border-radius: {radius_md}px;
+        }}
+        QWidget#Banner QLabel {{
+            color: {c['text_primary']};
+            background: transparent;
+        }}
 
         /* ------------------------------------------------------- 按钮 -- */
         QPushButton {{
@@ -295,6 +304,50 @@ class Theme(QObject):
         QPushButton#IconButton:disabled {{
             background: transparent;
             color: {c['text_disabled']};
+        }}
+
+        /* --------------------------------------------------- 数值输入 -- */
+        QSpinBox, QDoubleSpinBox {{
+            background: {c['surface']};
+            border: 1px solid {c['border']};
+            border-radius: {radius_sm}px;
+            padding: 4px 8px;
+            min-height: 22px;
+            color: {c['text_primary']};
+            selection-background-color: {c['accent']};
+            selection-color: {c['on_accent']};
+        }}
+        QSpinBox:hover, QDoubleSpinBox:hover {{
+            border-color: {c['border_strong']};
+        }}
+        QSpinBox:focus, QDoubleSpinBox:focus {{
+            border: 1px solid {c['focus']};
+        }}
+        QSpinBox:disabled, QDoubleSpinBox:disabled {{
+            color: {c['text_disabled']};
+            background: {c['surface_sunken']};
+        }}
+        QSpinBox::up-button, QSpinBox::down-button,
+        QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+            width: 18px;
+            border: none;
+            background: transparent;
+        }}
+        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+            image: none;
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-bottom: 5px solid {c['text_secondary']};
+        }}
+        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+            image: none;
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid {c['text_secondary']};
         }}
 
         /* ----------------------------------------------------- 输入框 -- */

@@ -86,6 +86,7 @@ def _run_selftest(require_models: bool = False) -> int:
             lines.append("提示: 未安装放大模型，可在界面「下载模型」，或运行 ImageForge.exe --install-models")
             if require_models:
                 ok = False
+            _append_ffmpeg_line(lines)
             lines.append("result: " + ("FAILED" if not ok else "OK (未安装模型)"))
             _write_selftest(lines)
             print("\n".join(lines))
@@ -125,10 +126,25 @@ def _run_selftest(require_models: bool = False) -> int:
     except Exception:  # noqa: BLE001 - 自检要报告任何异常而不是弹窗
         lines.append(traceback.format_exc())
         ok = False
+    _append_ffmpeg_line(lines)
     lines.append("result: " + ("OK" if ok else "FAILED"))
     _write_selftest(lines)
     print("\n".join(lines))
     return 0 if ok else 1
+
+
+def _append_ffmpeg_line(lines: list[str]) -> None:
+    """报告 ffmpeg 是否可用（视频转换依赖它，缺失不算自检失败）。"""
+    try:
+        from .. import video
+
+        ffmpeg = video.find_ffmpeg()
+        if ffmpeg is None:
+            lines.append("ffmpeg: 未安装（视频转换不可用，可 winget install Gyan.FFmpeg.Essentials）")
+        else:
+            lines.append(f"ffmpeg: {ffmpeg}")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"ffmpeg: 检查失败（{exc}）")
 
 
 def _write_selftest(lines: list[str]) -> None:

@@ -40,19 +40,18 @@ FORMATS: dict[str, FormatSpec] = {
     "webp": FormatSpec("webp", "WebP", ".webp", True, True, "lossy", 88, "高压缩 · 支持动图"),
     "ico": FormatSpec("ico", "ICO", ".ico", True, False, "icon", 100, "图标 · 多尺寸"),
     "bmp": FormatSpec("bmp", "BMP", ".bmp", False, False, "lossless", 100, "无压缩 · 兼容老系统"),
-    "gif": FormatSpec("gif", "GIF", ".gif", True, True, "lossless", 100, "256 色 · 支持动图"),
     "tiff": FormatSpec("tiff", "TIFF", ".tiff", True, False, "lossless", 100, "印刷常用"),
     "avif": FormatSpec("avif", "AVIF", ".avif", True, False, "lossy", 62, "新一代压缩 · 较慢"),
 }
 
-FORMAT_ORDER = ["ico", "png", "jpg", "webp", "bmp", "gif", "tiff", "avif"]
+FORMAT_ORDER = ["ico", "png", "jpg", "webp", "bmp", "tiff", "avif"]
 
 INPUT_EXTS = {
     ".png", ".jpg", ".jpeg", ".jfif", ".jpe", ".webp", ".bmp", ".dib",
     ".gif", ".tif", ".tiff", ".ico", ".avif", ".tga", ".ppm", ".pgm", ".pbm",
 }
 
-ANIMATED_TARGETS = {"gif", "webp"}
+ANIMATED_TARGETS = {"webp"}
 
 
 @dataclass
@@ -175,8 +174,6 @@ def _flatten(img: Image.Image, background: tuple[int, int, int]) -> Image.Image:
 def _prepare_static(img: Image.Image, target: str, options: ConvertOptions) -> Image.Image:
     if target in ("jpg", "bmp"):
         return _flatten(img, options.background)
-    if target == "gif":
-        return _flatten(img, options.background).convert("P", palette=Image.Palette.ADAPTIVE, colors=256)
     if _has_alpha(img):
         return img.convert("RGBA")
     return img.convert("RGB")
@@ -226,8 +223,6 @@ def _save_static(img: Image.Image, dest: Path, options: ConvertOptions) -> None:
             params["icc_profile"] = icc
         if exif:
             params["exif"] = exif
-    elif target == "gif":
-        params.update(optimize=False)
     elif target == "avif":
         params.update(quality=options.quality, speed=6)
         if icc:
@@ -248,7 +243,6 @@ _PIL_FORMAT = {
     "jpg": "JPEG",
     "webp": "WEBP",
     "bmp": "BMP",
-    "gif": "GIF",
     "tiff": "TIFF",
     "avif": "AVIF",
 }
@@ -261,11 +255,7 @@ def _save_animated(img: Image.Image, dest: Path, options: ConvertOptions, info: 
     for frame in ImageSequence.Iterator(img):
         duration = frame.info.get("duration", img.info.get("duration", 80)) or 80
         durations.append(max(20, int(duration)))
-        if target == "gif":
-            frames.append(_flatten(frame.convert("RGBA"), options.background).convert(
-                "P", palette=Image.Palette.ADAPTIVE, colors=256))
-        else:
-            frames.append(frame.convert("RGBA" if _has_alpha(frame) else "RGB"))
+        frames.append(frame.convert("RGBA" if _has_alpha(frame) else "RGB"))
     loop = int(img.info.get("loop", 0) or 0)
     params: dict = dict(
         save_all=True,
@@ -274,8 +264,7 @@ def _save_animated(img: Image.Image, dest: Path, options: ConvertOptions, info: 
         loop=loop,
         optimize=False,
     )
-    if target == "webp":
-        params.update(quality=options.quality, method=4, lossless=options.lossless)
+    params.update(quality=options.quality, method=4, lossless=options.lossless)
     try:
         frames[0].save(dest, format=_PIL_FORMAT[target], **params)
     except OSError as exc:

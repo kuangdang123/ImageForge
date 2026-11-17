@@ -187,13 +187,18 @@ class ConverterTest(unittest.TestCase):
             diff = ImageChops.difference(before.convert("RGBA"), after.convert("RGBA"))
             self.assertIsNone(diff.getbbox(), "无损 WebP 应与原图一致")
 
-    def test_static_to_gif_uses_palette(self) -> None:
+    def test_gif_is_not_an_output_format(self) -> None:
         src = make_photo_jpg(self.root / "p.jpg", (120, 90))
         result = self.convert(src, "gif")
+        self.assertFalse(result.ok)
+        self.assertIn("不支持", result.message)
+        self.assertIsNone(result.dest)
+
+    def test_gif_input_is_still_supported(self) -> None:
+        src = make_animated_gif(self.root / "still.gif")
+        result = self.convert(src, "png")
         self.assertTrue(result.ok, result.message)
-        with Image.open(result.dest) as img:
-            self.assertEqual(img.mode, "P")
-            self.assertEqual(img.size, (120, 90))
+        self.assertEqual(result.dest.suffix, ".png")
 
     def test_animated_gif_to_webp_keeps_frames(self) -> None:
         src = make_animated_gif(self.root / "anim.gif")

@@ -74,12 +74,16 @@ class QueueItem:
     thumb: QPixmap | None = None
     message: str = ""
     detail: str = ""
+    kind: str = "image"
+    meta_override: str = ""
 
     @property
     def name(self) -> str:
         return self.path.name
 
     def meta_text(self, theme: Theme) -> str:
+        if self.meta_override:
+            return self.meta_override
         if self.info is None or not self.info.ok:
             return self.message or "正在读取…"
         parts = [f"{self.info.width}×{self.info.height}"]
@@ -98,6 +102,8 @@ class QueueItem:
         size = getattr(self.result, "bytes", 0)
         if not size and dest is not None and dest.exists():
             size = dest.stat().st_size
+        if hasattr(self.result, "duration"):  # 视频结果
+            return f"{self.result.width}×{self.result.height} · {converter.human_size(size)}"
         if hasattr(self.result, "model_scale"):  # 超分结果
             return f"{self.result.width}×{self.result.height} · {converter.human_size(size)}"
         spec = converter.FORMATS[dest.suffix.lstrip(".").lower()] if dest else None
@@ -392,10 +398,7 @@ class FileDelegate(QStyledItemDelegate):
         if item.status == "failed" and item.message:
             return item.message
         if item.status == "done":
-            text = item.result_text()
-            if item.result and item.result.warnings:
-                text += " · " + item.result.warnings[0]
-            return text
+            return item.result_text()
         if item.status == "running" and item.result:
             return item.result_text()
         return item.meta_text(self.theme)
