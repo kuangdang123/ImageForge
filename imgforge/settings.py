@@ -61,6 +61,7 @@ DEFAULTS: Dict[str, Any] = {
     "video_loop": True,            # GIF 循环
     "video_audio": True,
     "video_overwrite": False,
+    "video_max_bytes": 0,        # GIF 目标体积（字节，0 = 原画不限）
 }
 
 

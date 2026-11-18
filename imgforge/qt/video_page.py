@@ -402,9 +402,9 @@ class VideoPage(QWidget):
         self._worker.fraction.connect(self._on_fraction)
         self._worker.resulted.connect(self._on_result)
         self._worker.finished_batch.connect(self._on_finished)
+        self.progress.set_indeterminate(False)
         self.progress.set_value(0.0)
-        self.progress.set_indeterminate(True)
-        self.status_label.setText(f"转换中 0/{len(targets)}")
+        self.status_label.setText(f"转换中 0/{len(targets)} · 0%")
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self._set_controls_enabled(False)
@@ -433,13 +433,22 @@ class VideoPage(QWidget):
     def _on_progress(self, done: int, total: int, name: str) -> None:
         self._base_done = done - 1
         self._base_total = max(1, total)
+        self.progress.set_indeterminate(False)
         self.progress.set_value((done - 1) / max(1, total))
-        self.status_label.setText(f"转换中 {done}/{total} · {name}")
+        percent = int(round((done - 1) / max(1, total) * 100))
+        self.status_label.setText(f"转换中 {done}/{total} · {percent}% · {name}")
 
     def _on_fraction(self, value: float) -> None:
         total = getattr(self, "_base_total", 0) or 1
         done = getattr(self, "_base_done", 0)
-        self.progress.set_value((done + max(0.0, min(1.0, value))) / total)
+        self.progress.set_indeterminate(False)
+        fraction = (done + max(0.0, min(1.0, value))) / total
+        self.progress.set_value(fraction)
+        percent = int(round(fraction * 100))
+        current = self.status_label.text()
+        head = current.split(" · ")[:2]
+        if len(head) == 2:
+            self.status_label.setText(" · ".join([head[0], f"{percent}%"] + current.split(" · ")[2:]))
 
     def _on_result(self, result: video.VideoResult) -> None:
         path = Path(result.src)

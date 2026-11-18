@@ -282,6 +282,30 @@ def safe_stem(name: str) -> str:
     return cleaned or "image"
 
 
+def auto_suffix(options: ConvertOptions) -> str:
+    """按输出参数生成文件名标签（例如 ``_ico_256px`` / ``_jpg_q92``）。
+
+    用户希望从文件名就能看出「这张图是按什么参数转出来的」，所以默认把
+    格式与关键参数写进名字里，而不是只改扩展名。
+    """
+    spec = options.spec()
+    key = spec.key
+    if key == "ico":
+        sizes = list(options.ico_sizes or [])
+        parts = [f"ico_{max(sizes) if sizes else 256}px"]
+        if options.ico_fit == "fill":
+            parts.append("fill")
+        elif options.ico_fit == "stretch":
+            parts.append("stretch")
+        if options.ico_payload == "bmp":
+            parts.append("bmp")
+        return "_" + "_".join(parts)
+    if key == "webp":
+        return "_webp_lossless" if options.lossless else f"_webp_q{options.quality}"
+    if spec.kind == "lossy":
+        return f"_{key}_q{options.quality}"
+    return f"_{key}"
+
 def resolve_destination(
     src: Path,
     options: ConvertOptions,
@@ -292,7 +316,7 @@ def resolve_destination(
 ) -> tuple[Path, bool]:
     """算出输出路径；返回 (路径, 是否因重名/同名源文件而改过名)。"""
     spec = options.spec()
-    stem = safe_stem(src.stem) + options.suffix
+    stem = safe_stem(src.stem) + str(options.suffix or "") + auto_suffix(options)
     if out_root is None:
         dest_dir = src.parent
     elif keep_tree and base_dir is not None:

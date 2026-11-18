@@ -590,6 +590,24 @@ def _resolve_format(source: Path, requested: str) -> tuple[str, str, list[str]]:
     return entry[0], entry[1], warnings
 
 
+def auto_suffix(options: UpscaleOptions) -> str:
+    """按放大参数生成文件名标签，例如 ``_2x_cugan-se`` / ``_1080p_apisr-grl``。"""
+    parts: list[str] = []
+    if options.mode == "target":
+        if options.preset == "custom" and options.custom_width and options.custom_height:
+            parts.append(f"{options.custom_width}x{options.custom_height}")
+        else:
+            parts.append(str(options.preset or "target"))
+    else:
+        parts.append(f"{int(options.scale)}x")
+    if options.model_id:
+        parts.append(str(options.model_id))
+    if options.denoise is not None and int(options.denoise) >= 0:
+        parts.append(f"dn{int(options.denoise)}")
+    if options.tta:
+        parts.append("tta")
+    return "_" + "_".join(parts)
+
 def _resolve_destination(
     source: Path,
     options: UpscaleOptions,
@@ -600,7 +618,7 @@ def _resolve_destination(
     ext: str,
 ) -> Path:
     """算出输出路径；绝不指向源文件本身。"""
-    stem = _clean_stem(source.stem) + _clean_suffix(options.suffix)
+    stem = _clean_stem(source.stem) + _clean_suffix(options.suffix) + auto_suffix(options)
     if out_root is None:
         dest_dir = source.parent
     elif keep_tree and base_dir is not None:

@@ -1149,7 +1149,7 @@ class MiniProgress(QWidget):
         self._value = 0.0
         self._indeterminate = False
         self._phase = 0.0
-        self.setFixedHeight(4)
+        self.setFixedHeight(6)
         self._timer = QTimer(self)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
@@ -1194,8 +1194,10 @@ class MiniProgress(QWidget):
             painter.setBrush(gradient)
             painter.drawRoundedRect(QRectF(x, 0, width, rect.height()), radius, radius)
         elif self._value > 0:
+            # 从左侧开始累积填充：进度再小也保留一小段可见的色块。
+            filled = max(rect.width() * self._value, radius * 2)
             painter.setBrush(self.theme.qcolor("accent"))
-            painter.drawRoundedRect(QRectF(0, 0, rect.width() * self._value, rect.height()), radius, radius)
+            painter.drawRoundedRect(QRectF(0, 0, min(filled, rect.width()), rect.height()), radius, radius)
 
 
 # ------------------------------------------------------------------ Toast --

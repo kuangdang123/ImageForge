@@ -310,7 +310,7 @@ class EngineSmokeTest(unittest.TestCase):
         self.assertTrue(result.ok, result.message)
         self.assertIsNotNone(result.dest)
         self.assertNotEqual(result.dest.resolve(), src.resolve())
-        self.assertEqual(result.dest.name, "tall_upscaled.png")
+        self.assertEqual(result.dest.name, "tall_2x_cugan-nose.png")
         self.assertEqual(src.read_bytes(), original, "源文件不允许被改动")
         self.assertTrue(any("已改用" in warning for warning in result.warnings), result.warnings)
         self.assertEqual((result.width, result.height), (400, 1040))

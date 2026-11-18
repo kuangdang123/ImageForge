@@ -74,7 +74,7 @@ def main() -> int:
     theme = Theme(mode=theme_name)
     theme.apply()
     window = MainWindow(theme, settings)
-    window.resize(1180, 800)
+    window.resize(1180, 880)
     window.show()
 
     deadline = time.monotonic() + 12
@@ -112,9 +112,11 @@ def main() -> int:
                 app.processEvents()
                 time.sleep(0.01)
         settle(0.4)
+        # 截图里展示 GIF 体积预设（自动压缩）这一组控件。
+        page.panel.target_group.set_value("gif", emit=True)
+        page.panel.size_group.set_value("5", emit=True)
+        settle(0.2)
         if mode == "video-done":
-            page.panel.target_group.set_value("gif", emit=True)
-            settle(0.2)
             page.start()
             deadline = time.monotonic() + 120
             while time.monotonic() < deadline and page.is_running():

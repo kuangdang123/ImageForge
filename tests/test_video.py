@@ -67,6 +67,19 @@ class VideoTest(unittest.TestCase):
         self._sample = path
         return path
 
+    def sample_wide(self) -> Path:
+        """2 秒 320×240@12fps 的 testsrc 视频（给 GIF 自动压缩用例造降档空间）。"""
+        path = self.root / "wide.mp4"
+        done = _run([
+            FFMPEG, "-hide_banner", "-nostdin", "-y", "-v", "error",
+            "-f", "lavfi", "-i", "testsrc=size=320x240:rate=12:duration=2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-an", str(path),
+        ])
+        self.assertEqual(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
+        self.assertTrue(path.is_file())
+        return path
+
     def out_dir(self) -> Path:
         path = self.root / "out"
         path.mkdir(parents=True, exist_ok=True)
@@ -77,6 +90,12 @@ class VideoTest(unittest.TestCase):
 
     def convert(self, src: Path, target: str, **kwargs) -> video.VideoResult:
         return video.convert_video(src, self.options(target, **kwargs), self.out_dir())
+
+    def plan_for(self, target: str, **kwargs) -> video._Plan:
+        """按当前样例视频算一份带真实输出尺寸的编码计划（命名用例用）。"""
+        options = self.options(target, **kwargs)
+        plan, _warnings = video._make_plan(options, options.spec())
+        return video._plan_with_size(plan, video.probe_video(self.sample()))
 
     # -------------------------------------------------------------- 探测 --
     def test_probe_size_duration_codec(self) -> None:
@@ -126,7 +145,7 @@ class VideoTest(unittest.TestCase):
         self.assertTrue(result.dest.is_file())
         self.assertGreater(result.dest.stat().st_size, 0)
         self.assertEqual(result.dest.suffix, ".webm")
-        self.assertEqual(result.dest.name, "sample.webm")
+        self.assertEqual(result.dest.name, "sample_webm_160x120_q50.webm")
         info = video.probe_video(result.dest)
         self.assertTrue(info.ok, info.message)
         self.assertEqual(info.video_codec, "vp9")
@@ -165,7 +184,7 @@ class VideoTest(unittest.TestCase):
         self.assertTrue(src.is_file())
         self.assertEqual(src.read_bytes(), before, "源文件被改写了")
         self.assertNotEqual(result.dest, src)
-        self.assertEqual(result.dest.name, "sample_mp4.mp4")
+        self.assertEqual(result.dest.name, "sample_mp4_160x120.mp4")
         self.assertGreater(result.dest.stat().st_size, 0)
         self.assertTrue(video.probe_video(result.dest).ok)
 
@@ -256,24 +275,24 @@ class VideoTest(unittest.TestCase):
         second = self.convert(source, "mp4")
         self.assertTrue(first.ok, first.message)
         self.assertTrue(second.ok, second.message)
-        self.assertEqual(first.dest.name, "clip.mp4")
-        self.assertEqual(second.dest.name, "clip (2).mp4")
+        self.assertEqual(first.dest.name, "clip_mp4_160x120.mp4")
+        self.assertEqual(second.dest.name, "clip_mp4_160x120 (2).mp4")
         self.assertNotEqual(first.dest, second.dest)
 
     def test_existing_file_is_never_overwritten(self) -> None:
         source = self.sample().with_name("clip.mkv")
         shutil.copy(self.sample(), source)
-        existing = self.out_dir() / "clip.mp4"
+        existing = self.out_dir() / "clip_mp4_160x120.mp4"
         existing.write_bytes(b"keep-me")
         result = self.convert(source, "mp4")
         self.assertTrue(result.ok, result.message)
         self.assertEqual(existing.read_bytes(), b"keep-me")
-        self.assertEqual(result.dest.name, "clip (2).mp4")
+        self.assertEqual(result.dest.name, "clip_mp4_160x120 (2).mp4")
 
     def test_overwrite_flag_replaces_existing_file(self) -> None:
         source = self.sample().with_name("clip.mkv")
         shutil.copy(self.sample(), source)
-        existing = self.out_dir() / "clip.mp4"
+        existing = self.out_dir() / "clip_mp4_160x120.mp4"
         existing.write_bytes(b"old")
         result = self.convert(source, "mp4", overwrite=True)
         self.assertTrue(result.ok, result.message)
@@ -283,13 +302,114 @@ class VideoTest(unittest.TestCase):
     def test_suffix_option(self) -> None:
         result = self.convert(self.sample(), "mp4", suffix="_small")
         self.assertTrue(result.ok, result.message)
-        self.assertEqual(result.dest.name, "sample_small.mp4")
+        self.assertEqual(result.dest.name, "sample_small_mp4_160x120.mp4")
 
     def test_no_part_file_left_behind(self) -> None:
         result = self.convert(self.sample(), "mkv")
         self.assertTrue(result.ok, result.message)
         leftovers = list(self.out_dir().glob("*.part"))
         self.assertEqual(leftovers, [])
+
+    def test_auto_suffix_tags(self) -> None:
+        """文件名自动带 格式 / 分辨率 / GIF 帧率 / 有损画质 标签。"""
+        def tag(target: str, **kwargs) -> str:
+            return video.auto_suffix(self.options(target, **kwargs), self.plan_for(target, **kwargs))
+
+        self.assertEqual(tag("gif"), "_gif_160x120_12fps")
+        self.assertEqual(tag("gif", fps=8), "_gif_160x120_8fps")
+        self.assertEqual(tag("gif", resolution="720p", fps=15), "_gif_720p_15fps")
+        self.assertEqual(tag("mp4", quality=88), "_mp4_160x120_q88")
+        self.assertEqual(tag("mp4", resolution="1080p", quality=88), "_mp4_1080p_q88")
+        self.assertEqual(tag("webm", quality=80), "_webm_160x120_q80")
+        self.assertEqual(tag("mkv"), "_mkv_160x120")  # 无损外壳不带画质标签
+        # 目标体积：整数 MB 不带小数，8MB → fit8mb
+        big = 8 * 1024 * 1024
+        self.assertEqual(tag("gif", max_bytes=big), "_gif_160x120_12fps_fit8mb")
+
+    def test_resolve_destination_orders_suffix_first(self) -> None:
+        """用户显式 suffix 在前、自动标签在后；重名仍按 (2) 递增。"""
+        kwargs = {"suffix": "_small", "fps": 15, "max_bytes": 8 * 1024 * 1024}
+        options = self.options("gif", **kwargs)
+        plan = self.plan_for("gif", **kwargs)
+        dest, renamed = video._resolve_destination(self.sample(), options, self.out_dir(), plan)
+        self.assertEqual(dest.name, "sample_small_gif_160x120_15fps_fit8mb.gif")
+        self.assertFalse(renamed)
+        dest.write_bytes(b"x")
+        again, renamed = video._resolve_destination(self.sample(), options, self.out_dir(), plan)
+        self.assertEqual(again.name, "sample_small_gif_160x120_15fps_fit8mb (2).gif")
+        self.assertTrue(renamed)
+
+    def test_gif_without_max_bytes_keeps_plain_flow(self) -> None:
+        """不设 max_bytes：不试编码、不加压缩警告，只是文件名多了标签。"""
+        result = self.convert(self.sample(), "gif")
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(result.dest.name, "sample_gif_160x120_12fps.gif")
+        self.assertFalse(any("压缩" in item for item in result.warnings), result.warnings)
+
+    def test_max_bytes_ignored_for_non_gif(self) -> None:
+        """max_bytes 只对 GIF 生效：mp4 照常转换、文件名不带 fit 标签。"""
+        result = self.convert(self.sample(), "mp4", max_bytes=60_000)
+        self.assertTrue(result.ok, result.message)
+        self.assertEqual(result.dest.name, "sample_mp4_160x120.mp4")
+        self.assertFalse(any("压缩" in item for item in result.warnings), result.warnings)
+
+    def test_gif_filter_low_colors(self) -> None:
+        """色数 <256 时 palettegen 限色、paletteuse 关抖动；满 256 色保持 bayer。"""
+        chain = video._gif_filter(12, 480, 128, "none")
+        self.assertIn("fps=12", chain)
+        self.assertIn("min(480,iw)", chain)
+        self.assertIn("palettegen=max_colors=128:stats_mode=diff", chain)
+        self.assertIn("paletteuse=dither=none", chain)
+        self.assertNotIn("bayer", chain)
+        full = video._gif_filter(12, 480)
+        self.assertIn("palettegen=stats_mode=diff", full)
+        self.assertIn("paletteuse=dither=bayer:bayer_scale=3", full)
+
+    def test_gif_target_size_degrades_until_fit(self) -> None:
+        """max_bytes 很小时 GIF 逐档降分辨率 / fps / 色数，且不残留 .part。"""
+        source = self.sample_wide()
+        limit = 60_000
+        result = self.convert(source, "gif", max_bytes=limit)
+        self.assertTrue(result.ok, result.message)
+        self.assertTrue(result.dest.is_file())
+        self.assertEqual(result.dest.name, "wide_gif_320x240_12fps_fit0.1mb.gif")
+        self.assertEqual(list(self.out_dir().glob("*.part")), [])
+
+        fits = [item for item in result.warnings if "压缩" in item]
+        self.assertEqual(len(fits), 1, result.warnings)
+        self.assertIn("fps", fits[0])   # 带降档说明：宽 × 帧率 × 色数
+        self.assertIn("色", fits[0])
+        if result.dest.stat().st_size <= limit:
+            self.assertIn("已自动压缩到", fits[0])
+        else:
+            self.assertIn("已尽量压缩", fits[0])
+
+    def test_gif_target_size_progress(self) -> None:
+        """试编码进度落在 0.05~0.95，最后一档结束后补到 1.0。"""
+        values: list[float] = []
+        result = video.convert_video(
+            self.sample_wide(),
+            self.options("gif", max_bytes=60_000),
+            self.out_dir(),
+            on_progress=values.append,
+        )
+        self.assertTrue(result.ok, result.message)
+        self.assertTrue(values, "没有收到进度回调")
+        self.assertEqual(values[-1], 1.0)
+        self.assertTrue(all(0.0 <= value <= 0.95 for value in values[:-1]), values)
+
+    def test_gif_target_size_cancel(self) -> None:
+        """试编码前取消：返回「已取消」且输出目录不留任何文件。"""
+        out = self.out_dir()
+        result = video.convert_video(
+            self.sample_wide(),
+            self.options("gif", max_bytes=60_000),
+            out,
+            should_cancel=lambda: True,
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual(result.message, "已取消")
+        self.assertEqual(list(out.iterdir()), [])
 
     # ---------------------------------------------------------- 批量与错误 --
     def test_run_batch_converts_all(self) -> None:
@@ -307,7 +427,7 @@ class VideoTest(unittest.TestCase):
         )
         self.assertEqual(len(results), 2)
         self.assertTrue(all(item.ok for item in results), [item.message for item in results])
-        self.assertEqual(seen, [(0, "a.mkv"), (1, "b.mkv")])
+        self.assertEqual(seen, [(0, "a_mkv_160x120.mkv"), (1, "b_mkv_160x120.mkv")])
 
     def test_run_batch_cancel(self) -> None:
         paths = [self.sample(), self.sample().with_name("b.mp4")]
@@ -435,7 +555,7 @@ class VideoTest(unittest.TestCase):
         shutil.copy(self.sample(), weird)
         result = video.convert_video(weird, self.options("mp4"), self.out_dir())
         self.assertTrue(result.ok, result.message)
-        self.assertEqual(result.dest.name, "文件夹 with space.mp4")
+        self.assertEqual(result.dest.name, "文件夹 with space_mp4_160x120.mp4")
         self.assertTrue(video.probe_video(result.dest).ok)
 
 

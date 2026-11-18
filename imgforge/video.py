@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterable
 
@@ -43,6 +43,7 @@ __all__ = [
     "run_batch",
     "collect_videos",
     "make_thumbnail",
+    "auto_suffix",
     "quality_to_crf",
     "quality_to_qscale",
     "human_size",
@@ -109,6 +110,28 @@ _RESOLUTION_WIDTHS = {
     "1440p": 2560,
     "2160p": 3840,
 }
+
+_GIF_DEFAULT_FPS = 12  # GIF 没指定帧率时的默认帧率（保持原有行为）
+
+# GIF「目标体积」的降档序列：(宽上限, fps, 调色板色数)。
+# 首档永远用用户请求的参数，这里只是「不达标时依次尝试」的兜底档位；宽和帧率
+# 还会再被用户请求夹住（min），保证只会越试越小，绝不会为了压体积反而更清晰。
+_GIF_FIT_STEPS: tuple[tuple[int, int, int], ...] = (
+    (720, 24, 256),
+    (640, 20, 256),
+    (480, 15, 256),
+    (480, 15, 128),
+    (360, 12, 128),
+    (360, 12, 64),
+    (240, 10, 64),
+    (240, 10, 32),
+)
+_MAX_GIF_FIT_STEPS = 8  # 降档档位上限（不含首档用户参数）
+
+_FIT_MB = 1024 * 1024  # 体积换算统一用 1 MB = 1024×1024 字节
+
+# 只有这几种有损格式在显式设置 quality 时才把 q 值写进文件名
+_QUALITY_TAG_KEYS = ("mp4", "webm", "avi")
 
 
 # ------------------------------------------------------------- ffmpeg 探测 --
@@ -313,6 +336,7 @@ class VideoOptions:
     audio: bool = True                # 非 gif：是否保留音轨
     suffix: str = ""
     overwrite: bool = False
+    max_bytes: int = 0                # 目标体积（字节）；0=关闭自动压缩，仅 GIF 生效
 
     def spec(self) -> VideoFormatSpec:
         try:
@@ -347,6 +371,9 @@ class _Plan:
     duration: float
     loop: bool
     audio: bool
+    max_bytes: int = 0     # GIF 目标体积；0=不限
+    width: int = 0         # 真实输出宽（探测源视频后填入；0=未知）
+    height: int = 0        # 真实输出高
 
 
 # ------------------------------------------------------------- 画质 / 参数 --
@@ -407,6 +434,7 @@ def _make_plan(options: VideoOptions, spec: VideoFormatSpec) -> tuple[_Plan, lis
     fps = max(0, min(60, _as_int(options.fps, 0)))
     start = max(0.0, _as_float(options.start, 0.0))
     duration = max(0.0, _as_float(options.duration, 0.0))
+    max_bytes = max(0, _as_int(options.max_bytes, 0))
     resolution = str(options.resolution or "source").strip().lower()
     if resolution != "source" and resolution not in _RESOLUTION_WIDTHS:
         warnings.append(f"未知分辨率 {options.resolution}，已按原始分辨率输出")
@@ -420,8 +448,30 @@ def _make_plan(options: VideoOptions, spec: VideoFormatSpec) -> tuple[_Plan, lis
         duration=duration,
         loop=bool(options.loop),
         audio=bool(options.audio),
+        max_bytes=max_bytes,
     )
     return plan, warnings
+
+
+def _output_size(plan: _Plan, info: VideoInfo) -> tuple[int, int]:
+    """估算真实输出尺寸：与 ffmpeg 的 ``scale='min(W,iw)':-2`` 规则一致（不放大）。"""
+    if not info.ok or info.width <= 0 or info.height <= 0:
+        return (0, 0)
+    target = _RESOLUTION_WIDTHS.get(plan.resolution)
+    if not target or target >= info.width:
+        return (info.width, info.height)
+    height = max(2, int(round(target * info.height / info.width)))
+    if height % 2:  # -2 要求高度为偶数，跟 ffmpeg 实际输出保持一致
+        height += 1
+    return (target, height)
+
+
+def _plan_with_size(plan: _Plan, info: VideoInfo) -> _Plan:
+    """把探测到的真实输出宽高填进计划（文件名标签要用）。"""
+    width, height = _output_size(plan, info)
+    if width <= 0 or height <= 0:
+        return plan
+    return replace(plan, width=width, height=height)
 
 
 def _scale_filter(width: int) -> str:
@@ -430,16 +480,92 @@ def _scale_filter(width: int) -> str:
     return f"scale='min({width},iw)':-2"
 
 
-def _gif_filter(fps: int, width: int | None) -> str:
+def _gif_filter(fps: int, width: int | None, colors: int = 256, dither: str = "bayer") -> str:
+    """GIF 滤镜链：fps → 缩放 → palettegen/paletteuse。
+
+    colors 少于 256 时用 ``max_colors`` 限色并关掉抖动（低色数再抖动只会更花、
+    体积也降不下来）；满 256 色时保持原来的 ``dither=bayer:bayer_scale=3``。
+    """
     if width:
         scale = f"{_scale_filter(width)}:flags=lanczos"
     else:
         scale = "scale=iw:-2:flags=lanczos"
+    colors = max(2, min(256, int(colors)))
+    if colors < 256:
+        palettegen = f"palettegen=max_colors={colors}:stats_mode=diff"
+    else:
+        palettegen = "palettegen=stats_mode=diff"
+    if colors < 256 or str(dither).strip().lower() == "none":
+        paletteuse = "paletteuse=dither=none"
+    else:
+        paletteuse = "paletteuse=dither=bayer:bayer_scale=3"
     return (
         f"fps={fps},{scale},"
-        "split[a][b];[a]palettegen=stats_mode=diff[p];"
-        "[b][p]paletteuse=dither=bayer:bayer_scale=3"
+        f"split[a][b];[a]{palettegen}[p];"
+        f"[b][p]{paletteuse}"
     )
+
+
+@dataclass(frozen=True)
+class _GifRung:
+    """GIF 自动压缩的一档参数：宽上限 / 帧率 / 调色板色数 / 抖动方式。"""
+
+    width: int | None   # None = 原始宽度
+    fps: int
+    colors: int
+    dither: str = "bayer"
+
+    def text(self) -> str:
+        """给用户看的一档说明，例如 ``宽 480 · 15 fps · 128 色``。"""
+        width = f"宽 {self.width}" if self.width else "宽 原始宽度"
+        return f"{width} · {self.fps} fps · {self.colors} 色"
+
+
+@dataclass
+class _GifFitOutcome:
+    """自动压缩的试编码结果。"""
+
+    path: Path | None = None        # 留下的一档临时文件（由调用方推进到目标）
+    rung: _GifRung | None = None    # 对应档位（命中档 / 最小档）
+    bytes: int = 0
+    within_limit: bool = False      # 是否压到了 max_bytes 以内
+    attempts: int = 0               # 实际尝试了几档
+    cancelled: bool = False
+    timed_out: bool = False
+    stderr: str = ""
+
+
+def _not_lighter(candidate: _GifRung, previous: _GifRung) -> bool:
+    """候选档是否没有比上一档更轻（宽 / 帧率 / 色数全都不降，且不是同一档）。"""
+    if candidate == previous:
+        return True
+    unknown_width = 10 ** 9  # 原始宽度按「无限大」参与比较
+    pairs = (
+        (candidate.width or unknown_width, previous.width or unknown_width),
+        (candidate.fps, previous.fps),
+        (candidate.colors, previous.colors),
+    )
+    return all(cur >= prev for cur, prev in pairs)
+
+
+def _gif_fit_ladder(plan: _Plan) -> list[_GifRung]:
+    """生成「用户请求 → 依次降档」的试编码档位（去重，最多 8 档降档）。"""
+    requested_width = plan.width if plan.width > 0 else _RESOLUTION_WIDTHS.get(plan.resolution)
+    requested_fps = plan.fps or _GIF_DEFAULT_FPS
+    rungs = [_GifRung(requested_width, requested_fps, 256)]
+    for width, fps, colors in _GIF_FIT_STEPS:
+        if len(rungs) - 1 >= _MAX_GIF_FIT_STEPS:
+            break
+        rung = _GifRung(
+            min(width, requested_width) if requested_width else width,
+            min(fps, requested_fps),
+            colors,
+            "bayer" if colors >= 256 else "none",
+        )
+        if _not_lighter(rung, rungs[-1]):
+            continue
+        rungs.append(rung)
+    return rungs
 
 
 def _thumb_filter(box: int) -> str:
@@ -450,7 +576,13 @@ def _thumb_filter(box: int) -> str:
     )
 
 
-def _build_command(ffmpeg: Path, src: Path, part: Path, plan: _Plan) -> list[str]:
+def _build_command(
+    ffmpeg: Path,
+    src: Path,
+    part: Path,
+    plan: _Plan,
+    gif: _GifRung | None = None,
+) -> list[str]:
     spec = plan.spec
     cmd = [
         str(ffmpeg), "-hide_banner", "-nostdin", "-y",
@@ -458,6 +590,12 @@ def _build_command(ffmpeg: Path, src: Path, part: Path, plan: _Plan) -> list[str
     ]
 
     if spec.kind == "gif":
+        if gif is None:  # 不走自动压缩时沿用原来的参数（分辨率按档位宽度上限夹）
+            gif = _GifRung(
+                _RESOLUTION_WIDTHS.get(plan.resolution),
+                plan.fps or _GIF_DEFAULT_FPS,
+                256,
+            )
         if plan.start > 0:
             cmd += ["-ss", f"{plan.start:.3f}"]
         cmd += ["-i", str(src)]
@@ -465,7 +603,7 @@ def _build_command(ffmpeg: Path, src: Path, part: Path, plan: _Plan) -> list[str
             cmd += ["-t", f"{plan.duration:.3f}"]
         cmd += [
             "-an",
-            "-vf", _gif_filter(plan.fps or 12, _RESOLUTION_WIDTHS.get(plan.resolution)),
+            "-vf", _gif_filter(gif.fps, gif.width, gif.colors, gif.dither),
             "-loop", "0" if plan.loop else "-1",
             "-f", _MUXERS["gif"],
             str(part),
@@ -691,14 +829,44 @@ def _same_path(a: Path, b: Path) -> bool:
         return str(a).lower() == str(b).lower()
 
 
+def _fit_mb_label(max_bytes: int) -> str:
+    """max_bytes → 文件名里的 MB 数字：8 MB 记作 ``8``，7.8 MB 记作 ``7.8``。"""
+    mb = round(max_bytes / _FIT_MB, 1)
+    return f"{max(mb, 0.1):g}"
+
+
+def auto_suffix(options: VideoOptions, plan: _Plan) -> str:
+    """按输出参数生成文件名标签，例如 ``_mp4_1080p_q88`` / ``_gif_480p_15fps_fit8mb``。
+
+    用户希望从文件名就能看出「这个视频是按什么参数转出来的」，所以格式、分辨率、
+    GIF 帧率 / 目标体积、有损画质都默认写进名字里，而不是只改扩展名。
+    """
+    parts = [str(plan.spec.key)]
+    if plan.resolution == "source":
+        if plan.width > 0 and plan.height > 0:
+            parts.append(f"{plan.width}x{plan.height}")
+        else:  # 探测失败时退化成标记，别把 0x0 写进名字
+            parts.append("source")
+    else:
+        parts.append(plan.resolution)
+    if plan.spec.kind == "gif":
+        parts.append(f"{plan.fps or _GIF_DEFAULT_FPS}fps")
+        if plan.max_bytes > 0:
+            parts.append(f"fit{_fit_mb_label(plan.max_bytes)}mb")
+    elif plan.spec.key in _QUALITY_TAG_KEYS and options.quality is not None:
+        parts.append(f"q{plan.quality}")
+    return "_" + "_".join(parts)
+
+
 def _resolve_destination(
     source: Path,
     options: VideoOptions,
     out_root: str | os.PathLike[str] | None,
+    plan: _Plan,
 ) -> tuple[Path, bool]:
     """算出输出路径；返回 (路径, 是否因重名/同名源文件而改过名)。"""
-    spec = options.spec()
-    stem = safe_stem(source.stem) + str(options.suffix or "")
+    spec = plan.spec
+    stem = safe_stem(source.stem) + str(options.suffix or "") + auto_suffix(options, plan)
     dest_dir = Path(out_root) if out_root else source.parent
     candidate = dest_dir / f"{stem}{spec.ext}"
 
@@ -742,6 +910,16 @@ def _safe_call(callback: Callable[..., None], *args: object) -> None:
         callback(*args)
     except Exception:  # noqa: BLE001 - 进度回调属于 UI 层，异常不应中断转换
         pass
+
+
+def _cancel_requested(should_cancel: Callable[[], bool] | None) -> bool:
+    """取消回调同属 UI 层：回调本身抛异常时按「未取消」处理。"""
+    if should_cancel is None:
+        return False
+    try:
+        return bool(should_cancel())
+    except Exception:  # noqa: BLE001 - 与 _run_ffmpeg 的单次编码语义保持一致
+        return False
 
 
 def _run_ffmpeg(
@@ -827,14 +1005,9 @@ def _run_ffmpeg(
         for raw in proc.stdout:
             if cancelled[0] or timed_out[0]:
                 break
-            if should_cancel is not None:
-                try:
-                    stop_now = bool(should_cancel())
-                except Exception:  # noqa: BLE001 - 取消回调同属 UI 层
-                    stop_now = False
-                if stop_now:
-                    stop(cancel=True)
-                    break
+            if _cancel_requested(should_cancel):
+                stop(cancel=True)
+                break
             if on_progress is not None and progress_total > 0:
                 fraction = _progress_fraction(raw, progress_total)
                 if fraction is not None and fraction >= last_fraction + 0.01:
@@ -869,9 +1042,8 @@ def _run_ffmpeg(
 
 # ------------------------------------------------------------ 单文件入口 --
 
-def _progress_total_seconds(source: Path, plan: _Plan) -> float:
+def _progress_total_seconds(info: VideoInfo, plan: _Plan) -> float:
     total = 0.0
-    info = _probe_video(source, with_audio=False)
     if info.ok and info.duration > 0:
         total = float(info.duration)
     if plan.start > 0 and total > 0:
@@ -899,6 +1071,82 @@ def _discard(path: Path | None) -> None:
             path.unlink()
     except OSError:
         pass
+
+
+def _encode_gif_fit(
+    ffmpeg: Path,
+    source: Path,
+    part: Path,
+    plan: _Plan,
+    *,
+    progress_total: float = 0.0,
+    on_progress: Callable[[float], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> _GifFitOutcome:
+    """GIF 目标体积：逐档试编码，返回命中（或最小）一档留下的临时文件。
+
+    每档先编码到独立的 ``*.part`` 临时文件，用 ``st_size <= max_bytes`` 判断；
+    命中即停，全部不中则保留最小的一档。整个试编码过程的进度均匀铺在 0.05~0.95
+    （最后一档完成后的 1.0 由调用方用现有收尾逻辑上报）。临时文件的清理由这里的
+    finally 负责：取消 / 超时 / 编码失败都不会在输出目录留下 .part。
+    """
+    outcome = _GifFitOutcome()
+    rungs = _gif_fit_ladder(plan)
+    step = 0.9 / len(rungs)
+    temps: list[Path] = []
+    candidate: Path | None = None
+    promoted: Path | None = None
+    try:
+        for index, rung in enumerate(rungs):
+            if _cancel_requested(should_cancel):  # 每次尝试前都检查取消
+                outcome.cancelled = True
+                return outcome
+            temp = part.with_name(f"{part.stem}.{index}.part")
+            temps.append(temp)
+            base = 0.05 + index * step
+
+            def report(fraction: float, _base: float = base) -> None:
+                if on_progress is None:
+                    return
+                value = _base + min(1.0, max(0.0, float(fraction))) * step
+                _safe_call(on_progress, min(0.95, value))
+
+            outcome.attempts = index + 1
+            code, stderr, cancelled, timed_out = _run_ffmpeg(
+                _build_command(ffmpeg, source, temp, plan, rung),
+                timeout=_FFMPEG_TIMEOUT,
+                on_progress=report if on_progress is not None else None,
+                should_cancel=should_cancel,
+                progress_total=progress_total if on_progress is not None else 0.0,
+            )
+            if cancelled:
+                outcome.cancelled = True
+                return outcome
+            if timed_out:
+                outcome.timed_out = True
+                return outcome
+            if code != 0 or not temp.is_file() or temp.stat().st_size == 0:
+                outcome.stderr = stderr or outcome.stderr
+                _discard(temp)
+                continue  # 这一档编码失败，继续降档试；全部失败时由调用方报错
+            size = temp.stat().st_size
+            if candidate is None or size < outcome.bytes:
+                if candidate is not None:
+                    _discard(candidate)  # 只留最小的一档，临时文件不会越积越多
+                candidate, outcome.rung, outcome.bytes = temp, rung, size
+            else:
+                _discard(temp)  # 降档后反而更大（调色板/抖动导致），丢弃这一档
+            if size <= plan.max_bytes:  # 命中目标体积，停止降档
+                outcome.within_limit = True
+                break
+        if candidate is not None:
+            outcome.path = candidate  # 命中档，或全部不达标时最小的一档
+            promoted = candidate      # 所有权交给调用方推进，finally 不再删
+        return outcome
+    finally:
+        for temp in temps:
+            if temp != promoted:
+                _discard(temp)
 
 
 def convert_video(
@@ -931,6 +1179,11 @@ def convert_video(
 
     plan, plan_warnings = _make_plan(options, spec)
     result.warnings.extend(plan_warnings)
+    # 文件名要写真实输出尺寸（resolution="source" 时），GIF 目标体积也要知道时长
+    # 来分配进度，所以这里统一探测一次源视频。
+    info = _probe_video(source, with_audio=False)
+    plan = _plan_with_size(plan, info)
+
     if spec.kind == "gif":
         if plan.audio:
             result.warnings.append("GIF 不含音轨，已忽略音频设置")
@@ -938,11 +1191,12 @@ def convert_video(
             result.warnings.append("GIF 分辨率较高，文件可能偏大")
     elif plan.fps:
         result.warnings.append("帧率设置只对 GIF 生效，已按原帧率输出")
+    gif_fit = spec.kind == "gif" and plan.max_bytes > 0
 
     part: Path | None = None
     try:
         try:
-            dest, _renamed = _resolve_destination(source, options, out_root)
+            dest, _renamed = _resolve_destination(source, options, out_root, plan)
             result.dest = dest
             dest.parent.mkdir(parents=True, exist_ok=True)
         except PermissionError:
@@ -955,29 +1209,60 @@ def convert_video(
             return result
 
         part = dest.with_name(dest.name + ".part")
-        cmd = _build_command(ffmpeg, source, part, plan)
-        progress_total = _progress_total_seconds(source, plan) if on_progress is not None else 0.0
+        progress_total = _progress_total_seconds(info, plan) if on_progress is not None else 0.0
 
-        code, stderr, cancelled, timed_out = _run_ffmpeg(
-            cmd,
-            timeout=_FFMPEG_TIMEOUT,
-            on_progress=on_progress,
-            should_cancel=should_cancel,
-            progress_total=progress_total,
-        )
-        if cancelled:
-            result.message = "已取消"
-            return result
-        if timed_out:
-            result.message = "转换超时（视频过长或系统繁忙）"
-            return result
-        if code != 0 or not part.is_file() or part.stat().st_size == 0:
-            result.message = _failure_message(stderr)
-            return result
+        if gif_fit:
+            outcome = _encode_gif_fit(
+                ffmpeg,
+                source,
+                part,
+                plan,
+                progress_total=progress_total,
+                on_progress=on_progress,
+                should_cancel=should_cancel,
+            )
+            if outcome.cancelled:
+                result.message = "已取消"
+                return result
+            if outcome.timed_out:
+                result.message = "转换超时（视频过长或系统繁忙）"
+                return result
+            if outcome.path is None or outcome.rung is None:
+                result.message = _failure_message(outcome.stderr)
+                return result
+            part = outcome.path  # 已编码好的成品临时文件，下面照常推进到目标
+            if on_progress is not None and progress_total > 0:
+                _safe_call(on_progress, 1.0)  # 试编码过程只铺 0.05~0.95
+            if outcome.within_limit and outcome.attempts > 1:
+                result.warnings.append(
+                    f"已自动压缩到 {human_size(outcome.bytes)}（{outcome.rung.text()}）"
+                )
+            elif not outcome.within_limit:
+                result.warnings.append(
+                    f"已尽量压缩，仍有 {human_size(outcome.bytes)}（{outcome.rung.text()}）"
+                )
+        else:
+            cmd = _build_command(ffmpeg, source, part, plan)
+            code, stderr, cancelled, timed_out = _run_ffmpeg(
+                cmd,
+                timeout=_FFMPEG_TIMEOUT,
+                on_progress=on_progress,
+                should_cancel=should_cancel,
+                progress_total=progress_total,
+            )
+            if cancelled:
+                result.message = "已取消"
+                return result
+            if timed_out:
+                result.message = "转换超时（视频过长或系统繁忙）"
+                return result
+            if code != 0 or not part.is_file() or part.stat().st_size == 0:
+                result.message = _failure_message(stderr)
+                return result
 
         # 极小概率的并发重名：转换期间目标被别的任务占了，再让一次名字
         if not options.overwrite and dest.exists():
-            dest, _renamed = _resolve_destination(source, options, out_root)
+            dest, _renamed = _resolve_destination(source, options, out_root, plan)
             result.dest = dest
         try:
             os.replace(part, dest)
@@ -998,7 +1283,7 @@ def convert_video(
         if meta.ok:
             result.width, result.height = meta.width, meta.height
             result.duration = meta.duration
-        if spec.kind == "gif" and result.bytes > 8 * 1024 * 1024:
+        if spec.kind == "gif" and not gif_fit and result.bytes > 8 * 1024 * 1024:
             result.warnings.append(
                 f"GIF 体积偏大（{human_size(result.bytes)}），可降低分辨率或帧率"
             )

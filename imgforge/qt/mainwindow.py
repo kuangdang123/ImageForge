@@ -43,7 +43,7 @@ from .widgets import ElidedLabel, MiniProgress, SegmentedControl, Toast
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 OUT_MODE_OPTIONS = [("same", "源文件旁"), ("folder", "指定文件夹")]
-MODE_OPTIONS = [("convert", "格式转换"), ("upscale", "分辨率放大"), ("video", "视频转换")]
+MODE_OPTIONS = [("convert", "图片转换"), ("video", "视频转换"), ("upscale", "分辨率放大")]
 MODE_NOUNS = {
     "convert": ("转换", "待转换", "转换中", "已转换"),
     "upscale": ("放大", "待放大", "放大中", "已放大"),
@@ -222,7 +222,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ImageForge · 图片转换 · 超分 · 视频")
         self.setWindowIcon(QIcon(str(ASSETS / "app.ico")))
         self.setAcceptDrops(True)
-        self.setMinimumSize(1040, 660)
+        self.setMinimumSize(1040, 700)
         self._build_ui()
         self._bind_shortcuts()
         self._load_geometry()
@@ -237,7 +237,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
         outer.setContentsMargins(20, 18, 20, 16)
-        outer.setSpacing(14)
+        outer.setSpacing(12)
 
         outer.addLayout(self._build_header())
         outer.addLayout(self._build_nav())
@@ -857,8 +857,10 @@ class MainWindow(QMainWindow):
             self.status_label.setText("正在取消…")
 
     def _on_convert_progress(self, done: int, total: int, name: str) -> None:
+        self.progress.set_indeterminate(False)
         self.progress.set_value(done / max(1, total))
-        self.status_label.setText(f"正在转换 {done}/{total} · {name}")
+        percent = int(round(done / max(1, total) * 100))
+        self.status_label.setText(f"正在转换 {done}/{total} · {percent}% · {name}")
 
     def _on_convert_result(self, result: converter.ConvertResult) -> None:
         row = self.model.row_of(result.src)
@@ -954,8 +956,10 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_upscale_progress(self, done: int, total: int, name: str) -> None:
+        self.progress.set_indeterminate(False)
         self.progress.set_value(done / max(1, total))
-        self.status_label.setText(f"正在放大 {done}/{total} · {name}")
+        percent = int(round(done / max(1, total) * 100))
+        self.status_label.setText(f"正在放大 {done}/{total} · {percent}% · {name}")
 
     def _on_upscale_result(self, result) -> None:
         row = self.model.row_of(result.src)
@@ -1051,7 +1055,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- 窗口 --
     def _load_geometry(self) -> None:
         raw = str(self.settings["window"] or "")
-        width, height = 1180, 800
+        width, height = 1180, 880
         if "x" in raw:
             try:
                 w, h = raw.lower().split("x", 1)

@@ -243,7 +243,7 @@ class ConverterTest(unittest.TestCase):
         first = self.convert(src, "jpg")
         second = self.convert(src, "jpg")
         self.assertNotEqual(first.dest, second.dest)
-        self.assertEqual(second.dest.name, "a (2).jpg")
+        self.assertEqual(second.dest.name, "a_jpg_q92 (2).jpg")
 
     def test_overwrite_flag_reuses_path(self) -> None:
         src = make_alpha_png(self.root / "a.png")
@@ -255,7 +255,7 @@ class ConverterTest(unittest.TestCase):
     def test_suffix_and_custom_stem(self) -> None:
         src = make_alpha_png(self.root / "logo.png")
         result = self.convert(src, "ico", suffix="_icon", ico_sizes=(32,))
-        self.assertEqual(result.dest.name, "logo_icon.ico")
+        self.assertEqual(result.dest.name, "logo_icon_ico_32px.ico")
 
     # ------------------------------------------------------------ 批量与错误 --
     def test_batch_keeps_going_after_failure(self) -> None:
