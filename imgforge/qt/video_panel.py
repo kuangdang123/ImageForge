@@ -142,7 +142,7 @@ class VideoPanel(QWidget):
         size_layout = QHBoxLayout(size_row)
         size_layout.setContentsMargins(0, 0, 0, 0)
         size_layout.setSpacing(8)
-        size_label.setToolTip("GIF 超过体积上限时会自动降低帧率与颜色数，直到压到上限以内")
+        size_label.setToolTip("GIF 超过自动压缩到目标体积：优先保住分辨率（文字尽量清晰），再降帧率与颜色数，数值越大越清晰")
         self.max_mb_spin = QSpinBox()
         self.max_mb_spin.setRange(1, 2000)
         self.max_mb_spin.setSuffix(" MB")

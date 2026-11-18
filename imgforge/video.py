@@ -113,20 +113,12 @@ _RESOLUTION_WIDTHS = {
 
 _GIF_DEFAULT_FPS = 12  # GIF 没指定帧率时的默认帧率（保持原有行为）
 
-# GIF「目标体积」的降档序列：(宽上限, fps, 调色板色数)。
-# 首档永远用用户请求的参数，这里只是「不达标时依次尝试」的兜底档位；宽和帧率
-# 还会再被用户请求夹住（min），保证只会越试越小，绝不会为了压体积反而更清晰。
-_GIF_FIT_STEPS: tuple[tuple[int, int, int], ...] = (
-    (720, 24, 256),
-    (640, 20, 256),
-    (480, 15, 256),
-    (480, 15, 128),
-    (360, 12, 128),
-    (360, 12, 64),
-    (240, 10, 64),
-    (240, 10, 32),
+# GIF「目标体积」的缩宽阶梯：优先保分辨率，只降帧率 / 色数，实在压不下去
+# 才按下面的比例一步步缩窄（每档只缩 10% 左右，避免一下掉到 240px 看不清）。
+_GIF_FIT_SCALES: tuple[float, ...] = (
+    0.90, 0.82, 0.74, 0.66, 0.58, 0.50, 0.44, 0.38, 0.32, 0.26, 0.22,
 )
-_MAX_GIF_FIT_STEPS = 8  # 降档档位上限（不含首档用户参数）
+_MAX_GIF_FIT_STEPS = 14  # 试编码档位上限（不含首档用户参数）
 
 _FIT_MB = 1024 * 1024  # 体积换算统一用 1 MB = 1024×1024 字节
 
@@ -480,27 +472,50 @@ def _scale_filter(width: int) -> str:
     return f"scale='min({width},iw)':-2"
 
 
-def _gif_filter(fps: int, width: int | None, colors: int = 256, dither: str = "bayer") -> str:
-    """GIF 滤镜链：fps → 缩放 → palettegen/paletteuse。
+def _gif_filter(
+    fps: int,
+    width: int | None,
+    colors: int = 256,
+    dither: str = "bayer",
+    *,
+    dedupe: bool = False,
+    global_palette: bool = False,
+    denoise: bool = True,
+) -> str:
+    """GIF 滤镜链：fps →（去重）→ 缩放 →（去噪）→ palettegen/paletteuse。
 
-    colors 少于 256 时用 ``max_colors`` 限色并关掉抖动（低色数再抖动只会更花、
-    体积也降不下来）；满 256 色时保持原来的 ``dither=bayer:bayer_scale=3``。
+    - ``dedupe``：插入 ``mpdecimate`` 丢掉静止重复帧（录屏/幻灯片能省 30–60%，
+      帧时间戳保持不变，播放速度不变）。
+    - ``global_palette``：用 ``stats_mode=full`` 让所有帧共用一张调色板，文件更小
+      （代价是渐变略有色带）；压体积时总是打开。
+    - ``denoise``：缩小后做一次轻量时域去噪（``hqdn3d``）。实拍/生成视频里的
+      颗粒噪点在调色板量化后会被放大成大量碎色块，是 GIF 体积最大的隐形来源；
+      去噪后同样清晰度下体积能小 25–35%（文字边缘基本不受影响）。
+    - 缩放用 ``flags=area``：缩小时按面积平均，比 lanczos 更不容易把噪点保留成
+      高频细节，进一步利于 LZW 压缩。
     """
     if width:
-        scale = f"{_scale_filter(width)}:flags=lanczos"
+        scale = f"scale='min({width},iw)':-2:flags=area"
     else:
-        scale = "scale=iw:-2:flags=lanczos"
+        scale = "scale=iw:-2:flags=area"
     colors = max(2, min(256, int(colors)))
+    mode = "full" if global_palette else "diff"
     if colors < 256:
-        palettegen = f"palettegen=max_colors={colors}:stats_mode=diff"
+        palettegen = f"palettegen=max_colors={colors}:stats_mode={mode}"
     else:
-        palettegen = "palettegen=stats_mode=diff"
+        palettegen = f"palettegen=stats_mode={mode}"
     if colors < 256 or str(dither).strip().lower() == "none":
         paletteuse = "paletteuse=dither=none"
     else:
         paletteuse = "paletteuse=dither=bayer:bayer_scale=3"
+    chain = [f"fps={fps}"]
+    if dedupe:
+        chain.append("mpdecimate=hi=768:lo=320:frac=0.33")
+    chain.append(scale)
+    if denoise:
+        chain.append("hqdn3d=2:2:6:6")
     return (
-        f"fps={fps},{scale},"
+        ",".join(chain) + ","
         f"split[a][b];[a]{palettegen}[p];"
         f"[b][p]{paletteuse}"
     )
@@ -514,6 +529,8 @@ class _GifRung:
     fps: int
     colors: int
     dither: str = "bayer"
+    dedupe: bool = False
+    denoise: bool = True
 
     def text(self) -> str:
         """给用户看的一档说明，例如 ``宽 480 · 15 fps · 128 色``。"""
@@ -548,24 +565,116 @@ def _not_lighter(candidate: _GifRung, previous: _GifRung) -> bool:
     return all(cur >= prev for cur, prev in pairs)
 
 
+_GIF_FIT_WIDTHS: tuple[float, ...] = (
+    1.0, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65,
+    0.60, 0.55, 0.50, 0.45, 0.40, 0.35, 0.30, 0.25,
+)
+_GIF_FIT_FPS: tuple[int, ...] = (15, 12, 10, 8, 6, 5, 4)
+_GIF_FIT_COLORS: tuple[int, ...] = (64, 32)
+_MAX_GIF_FIT_STEPS = 6       # 最多真的编码几档（预测已把起点压到目标附近）
+
+
+def _gif_score(width: int, fps: int, colors: int) -> float:
+    """档位「清晰度」评分：分辨率优先，帧率次之，色数只做轻微加权。
+
+    讲解类视频里，文字能不能看清几乎完全由分辨率决定，帧率只影响「顺不顺」；
+    所以宽度的权重最高（线性），帧率给 0.45 次方，色数只给 0.12 次方
+    （64 色比 32 色真正多用的字节并不多，但能明显减少暗部色带）。
+    """
+    return width * (fps ** 0.30) * ((colors / 32.0) ** 0.25)
+
+
 def _gif_fit_ladder(plan: _Plan) -> list[_GifRung]:
-    """生成「用户请求 → 依次降档」的试编码档位（去重，最多 8 档降档）。"""
+    """按「清晰度评分」从高到低生成候选档位（预测命中哪档就从哪档开始试）。
+
+    旧实现按「先降帧率、再缩宽」的固定顺序走，常常在还有 20% 余量时停在一个
+    偏保守的档位；现在把 宽 × 帧率 × 色数 的组合全部枚举出来，先算评分排序，
+    再用样片预测体积，直接从最可能命中的档位开始，命中即停、偏大就继续往下降。
+    """
     requested_width = plan.width if plan.width > 0 else _RESOLUTION_WIDTHS.get(plan.resolution)
     requested_fps = plan.fps or _GIF_DEFAULT_FPS
-    rungs = [_GifRung(requested_width, requested_fps, 256)]
-    for width, fps, colors in _GIF_FIT_STEPS:
-        if len(rungs) - 1 >= _MAX_GIF_FIT_STEPS:
-            break
-        rung = _GifRung(
-            min(width, requested_width) if requested_width else width,
-            min(fps, requested_fps),
-            colors,
-            "bayer" if colors >= 256 else "none",
+    base_fps = min(requested_fps, 15)
+    source_width = requested_width or 1920
+
+    rungs: list[_GifRung] = []
+    for scale in _GIF_FIT_WIDTHS:
+        width = None if requested_width is None and scale >= 1.0 else max(
+            96, int(round(source_width * scale / 2)) * 2
         )
-        if _not_lighter(rung, rungs[-1]):
-            continue
-        rungs.append(rung)
+        for fps in _GIF_FIT_FPS:
+            if fps > base_fps:
+                continue
+            for colors in _GIF_FIT_COLORS:
+                rungs.append(
+                    _GifRung(width, fps, colors, "bayer" if colors >= 256 else "none")
+                )
+    rungs.sort(key=lambda r: _gif_score(r.width or source_width, r.fps, r.colors), reverse=True)
     return rungs
+
+
+_PREDICT_WIDTH = 1280         # 预测用的试编码宽度（越接近目标越准）
+_PREDICT_FPS = 10             # 预测用的试编码帧率
+_PREDICT_COLORS = 64          # 预测用的调色板色数
+_PREDICT_SAMPLE = 2.5         # 预测用的采样时长（秒）
+_PREDICT_AREA_EXP = 3.7       # 体积随宽度增长的指数（实测噪声/细节丰富的素材近似三次以上）
+_PREDICT_SAFETY = 0.98        # 预测用样片略偏保守，乘 0.82 后留 2% 余量
+
+
+def _predict_gif_rung(
+    ffmpeg: Path,
+    source: Path,
+    plan: _Plan,
+    rungs: list[_GifRung],
+    duration: float,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> int:
+    """用一小段样片预编码，估算各档体积，直接跳到「评分最高且能装下」的档位。
+
+    逐档全片试编码在 1080p / 18s 的片子上要 3–5 分钟；先花约 2 秒编一段 640 宽的
+    样片，按「像素数 ^1.9 × 帧率 × 色数^0.55」外推，通常一次就能落到目标附近，
+    后面仍然逐档验证、必要时继续降档，所以预测不准只是多试一两次，不影响正确性。
+    """
+    if duration <= 0 or plan.max_bytes <= 0 or not rungs:
+        return 0
+    sample_seconds = min(_PREDICT_SAMPLE, duration)
+    if sample_seconds <= 0:
+        return 0
+    import tempfile
+
+    handle, name = tempfile.mkstemp(prefix="imgforge-predict-", suffix=".gif")
+    os.close(handle)
+    temp = Path(name)
+    # 片头常有淡入 / 静止，从 35% 处取 2.5 秒更接近全片平均复杂度
+    sample_start = max(0.0, duration * 0.35)
+    sample_plan = replace(plan, start=sample_start, duration=sample_seconds, max_bytes=0)
+    rung = _GifRung(_PREDICT_WIDTH, _PREDICT_FPS, _PREDICT_COLORS, "none")
+    try:
+        code, _stderr, cancelled, _timed_out = _run_ffmpeg(
+            _build_command(ffmpeg, source, temp, sample_plan, rung),
+            timeout=_FFMPEG_TIMEOUT,
+            should_cancel=should_cancel,
+        )
+        if cancelled or code != 0 or not temp.is_file() or temp.stat().st_size <= 0:
+            return 0
+        sample_bytes = temp.stat().st_size
+    finally:
+        _discard(temp)
+
+    duration_ratio = duration / sample_seconds
+    for index, candidate in enumerate(rungs):
+        width = candidate.width or _PREDICT_WIDTH
+        predicted = (
+            sample_bytes
+            * duration_ratio
+            * (width / _PREDICT_WIDTH) ** _PREDICT_AREA_EXP
+            * (candidate.fps / _PREDICT_FPS)
+            * (candidate.colors / _PREDICT_COLORS) ** 0.55
+            * 0.82  # 样片取自 35% 处，比全片平均更复杂，实测偏高约 1.22 倍
+        )
+        if predicted <= plan.max_bytes * _PREDICT_SAFETY:
+            return index
+    return len(rungs) - 1
 
 
 def _thumb_filter(box: int) -> str:
@@ -601,9 +710,20 @@ def _build_command(
         cmd += ["-i", str(src)]
         if plan.duration > 0:
             cmd += ["-t", f"{plan.duration:.3f}"]
+        vf = _gif_filter(
+            gif.fps,
+            gif.width,
+            gif.colors,
+            gif.dither,
+            dedupe=gif.dedupe,
+            global_palette=gif.dedupe,
+            denoise=gif.denoise,
+        )
+        cmd += ["-an", "-vf", vf]
+        if gif.dedupe:
+            # mpdecimate 会丢帧，必须让它按原始时间戳写每帧延迟，否则播放速度会变
+            cmd += ["-fps_mode", "vfr"]
         cmd += [
-            "-an",
-            "-vf", _gif_filter(gif.fps, gif.width, gif.colors, gif.dither),
             "-loop", "0" if plan.loop else "-1",
             "-f", _MUXERS["gif"],
             str(part),
@@ -858,6 +978,36 @@ def auto_suffix(options: VideoOptions, plan: _Plan) -> str:
     return "_" + "_".join(parts)
 
 
+def _rename_for_rung(
+    dest: Path,
+    source: Path,
+    options: VideoOptions,
+    plan: _Plan,
+    rung: _GifRung,
+) -> Path:
+    """自动压缩后按**实际生效**的帧率 / 宽度重命名，避免名字写 30fps 实际 10fps。"""
+    width = plan.width if rung.width is None or plan.width <= 0 else min(plan.width, rung.width)
+    height = plan.height
+    if plan.width > 0 and plan.height > 0 and width != plan.width:
+        # 等比缩放，文件名里的高要跟着宽一起变，否则会出现「1536x1080」这种假尺寸
+        height = max(2, int(round(plan.height * width / plan.width / 2)) * 2)
+    fit_plan = replace(plan, fps=rung.fps, width=width, height=height)
+    tag = auto_suffix(options, fit_plan)
+    stem = safe_stem(source.stem) + str(options.suffix or "") + tag
+    target = dest.with_name(stem + dest.suffix)
+    if _same_path(target, dest):
+        return dest
+    index = 2
+    while target.exists() and index < 1000:
+        target = dest.with_name(f"{stem} ({index}){dest.suffix}")
+        index += 1
+    try:
+        os.replace(dest, target)
+    except OSError:
+        return dest
+    return target
+
+
 def _resolve_destination(
     source: Path,
     options: VideoOptions,
@@ -1079,65 +1229,96 @@ def _encode_gif_fit(
     part: Path,
     plan: _Plan,
     *,
+    duration: float = 0.0,
     progress_total: float = 0.0,
     on_progress: Callable[[float], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> _GifFitOutcome:
-    """GIF 目标体积：逐档试编码，返回命中（或最小）一档留下的临时文件。
+    """GIF 目标体积：先预测、再逐档试编码，返回命中（或最小）一档留下的临时文件。
 
     每档先编码到独立的 ``*.part`` 临时文件，用 ``st_size <= max_bytes`` 判断；
-    命中即停，全部不中则保留最小的一档。整个试编码过程的进度均匀铺在 0.05~0.95
-    （最后一档完成后的 1.0 由调用方用现有收尾逻辑上报）。临时文件的清理由这里的
-    finally 负责：取消 / 超时 / 编码失败都不会在输出目录留下 .part。
+    命中即停，全部不中则保留最小的一档。预测只用来决定**从哪一档开始**，正确性
+    仍由真实文件大小兜底。整个试编码过程的进度均匀铺在 0.05~0.95（最后一档完成
+    后的 1.0 由调用方用现有收尾逻辑上报）。临时文件的清理由这里的 finally 负责：
+    取消 / 超时 / 编码失败都不会在输出目录留下 .part。
     """
     outcome = _GifFitOutcome()
     rungs = _gif_fit_ladder(plan)
-    step = 0.9 / len(rungs)
+    start = _predict_gif_rung(ffmpeg, source, plan, rungs, duration, should_cancel=should_cancel)
+    if start > 0:
+        rungs = rungs[start:]
+    step = 0.9 / max(1, len(rungs))
     temps: list[Path] = []
     candidate: Path | None = None
     promoted: Path | None = None
+
+    def encode(rung: _GifRung, index: int) -> tuple[str, int]:
+        """编码一档，返回 (状态, 字节数)；状态 ∈ ok / cancelled / timed_out / failed。"""
+        temp = part.with_name(f"{part.stem}.{index}.part")
+        temps.append(temp)
+        base = 0.05 + index * step
+
+        def report(fraction: float, _base: float = base) -> None:
+            if on_progress is None:
+                return
+            value = _base + min(1.0, max(0.0, float(fraction))) * step
+            _safe_call(on_progress, min(0.95, value))
+
+        outcome.attempts = index + 1
+        code, stderr, cancelled, timed_out = _run_ffmpeg(
+            _build_command(ffmpeg, source, temp, plan, rung),
+            timeout=_FFMPEG_TIMEOUT,
+            on_progress=report if on_progress is not None else None,
+            should_cancel=should_cancel,
+            progress_total=progress_total if on_progress is not None else 0.0,
+        )
+        if cancelled:
+            return "cancelled", 0
+        if timed_out:
+            return "timed_out", 0
+        if code != 0 or not temp.is_file() or temp.stat().st_size == 0:
+            outcome.stderr = stderr or outcome.stderr
+            _discard(temp)
+            return "failed", 0
+        return "ok", temp.stat().st_size
+
     try:
         for index, rung in enumerate(rungs):
             if _cancel_requested(should_cancel):  # 每次尝试前都检查取消
                 outcome.cancelled = True
                 return outcome
-            temp = part.with_name(f"{part.stem}.{index}.part")
-            temps.append(temp)
-            base = 0.05 + index * step
-
-            def report(fraction: float, _base: float = base) -> None:
-                if on_progress is None:
-                    return
-                value = _base + min(1.0, max(0.0, float(fraction))) * step
-                _safe_call(on_progress, min(0.95, value))
-
-            outcome.attempts = index + 1
-            code, stderr, cancelled, timed_out = _run_ffmpeg(
-                _build_command(ffmpeg, source, temp, plan, rung),
-                timeout=_FFMPEG_TIMEOUT,
-                on_progress=report if on_progress is not None else None,
-                should_cancel=should_cancel,
-                progress_total=progress_total if on_progress is not None else 0.0,
-            )
-            if cancelled:
+            status, size = encode(rung, index)
+            if status == "cancelled":
                 outcome.cancelled = True
                 return outcome
-            if timed_out:
+            if status == "timed_out":
                 outcome.timed_out = True
                 return outcome
-            if code != 0 or not temp.is_file() or temp.stat().st_size == 0:
-                outcome.stderr = stderr or outcome.stderr
-                _discard(temp)
+            if status == "failed":
                 continue  # 这一档编码失败，继续降档试；全部失败时由调用方报错
-            size = temp.stat().st_size
+            temp = temps[-1]
             if candidate is None or size < outcome.bytes:
                 if candidate is not None:
                     _discard(candidate)  # 只留最小的一档，临时文件不会越积越多
                 candidate, outcome.rung, outcome.bytes = temp, rung, size
             else:
                 _discard(temp)  # 降档后反而更大（调色板/抖动导致），丢弃这一档
-            if size <= plan.max_bytes:  # 命中目标体积，停止降档
+            if size <= plan.max_bytes:  # 命中目标体积
                 outcome.within_limit = True
+                # 命中得比较轻松（不到上限的 85%）说明还有余量，回头把更高评分
+                # （更清晰）的档位逐级试一遍，能装下就换成更好的；最多回溯 3 档，
+                # 保证总耗时可控。
+                if size <= plan.max_bytes * 0.85:
+                    for back in range(1, 2):
+                        if index - back < 0:
+                            break
+                        status2, size2 = encode(rungs[index - back], index - back)
+                        if status2 == "ok" and size2 <= plan.max_bytes:
+                            _discard(candidate)
+                            candidate, outcome.rung, outcome.bytes = (
+                                temps[-1], rungs[index - back], size2
+                            )
+                            break
                 break
         if candidate is not None:
             outcome.path = candidate  # 命中档，或全部不达标时最小的一档
@@ -1217,6 +1398,7 @@ def convert_video(
                 source,
                 part,
                 plan,
+                duration=info.duration,
                 progress_total=progress_total,
                 on_progress=on_progress,
                 should_cancel=should_cancel,
@@ -1272,6 +1454,10 @@ def convert_video(
         except OSError as exc:
             result.message = f"写入失败：{exc}"
             return result
+
+        if gif_fit and outcome.rung is not None:
+            dest = _rename_for_rung(dest, source, options, plan, outcome.rung)
+            result.dest = dest
 
         result.ok = True
         result.message = "完成"

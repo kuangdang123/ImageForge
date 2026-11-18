@@ -372,7 +372,10 @@ class VideoTest(unittest.TestCase):
         result = self.convert(source, "gif", max_bytes=limit)
         self.assertTrue(result.ok, result.message)
         self.assertTrue(result.dest.is_file())
-        self.assertEqual(result.dest.name, "wide_gif_320x240_12fps_fit0.1mb.gif")
+        # 新策略是「分辨率优先」：具体落在哪一档取决于内容复杂度，只校验标签
+        # 结构与「没有塌成一条细线」即可（旧实现会掉到 320px 甚至更小）。
+        self.assertRegex(result.dest.name, r"^wide_gif_\d+x\d+_\d+fps_fit0\.1mb\.gif$")
+        self.assertGreaterEqual(result.width, 160, result.dest.name)
         self.assertEqual(list(self.out_dir().glob("*.part")), [])
 
         fits = [item for item in result.warnings if "压缩" in item]
@@ -383,6 +386,45 @@ class VideoTest(unittest.TestCase):
             self.assertIn("已自动压缩到", fits[0])
         else:
             self.assertIn("已尽量压缩", fits[0])
+
+    def test_gif_fit_ladder_is_score_ordered(self) -> None:
+        """候选档位按清晰度评分从高到低排列，且第一个就是原始宽度 + 最高帧率。"""
+        plan = video._Plan(
+            spec=video.VIDEO_FORMATS["gif"], quality=88, resolution="source",
+            fps=30, start=0, duration=0, loop=True, audio=True,
+            max_bytes=1024 * 1024, width=1920, height=1080,
+        )
+        rungs = video._gif_fit_ladder(plan)
+        self.assertGreater(len(rungs), 50)
+        self.assertEqual(rungs[0].width, 1920)
+        self.assertEqual(rungs[0].fps, 15)
+        scores = [video._gif_score(r.width or 1920, r.fps, r.colors) for r in rungs]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+        # 宽 / 帧率 / 色数都是单调不增的组合，不会出现「更小反而排更前」
+        self.assertTrue(all(32 <= r.colors <= 64 for r in rungs))
+
+    def test_gif_filter_denoise_and_area(self) -> None:
+        """去噪与 area 缩放默认开启（体积能省 25% 以上，文字边缘基本不受影响）。"""
+        chain = video._gif_filter(12, 480, 64, "none")
+        self.assertIn("flags=area", chain)
+        self.assertIn("hqdn3d=", chain)
+        # 去重复帧是可选项（默认关闭，自动压缩的档位里才打开）
+        self.assertIn("mpdecimate=", video._gif_filter(12, 480, 64, "none", dedupe=True))
+        plain = video._gif_filter(12, 480, 64, "none", denoise=False)
+        self.assertNotIn("hqdn3d=", plain)
+
+    def test_predict_rung_without_duration_returns_zero(self) -> None:
+        """时长未知时不做预测，直接从最高评分档位开始试。"""
+        plan = video._Plan(
+            spec=video.VIDEO_FORMATS["gif"], quality=88, resolution="source",
+            fps=30, start=0, duration=0, loop=True, audio=True,
+            max_bytes=1024 * 1024, width=640, height=360,
+        )
+        rungs = video._gif_fit_ladder(plan)
+        index = video._predict_gif_rung(
+            Path("ffmpeg"), Path("in.mp4"), plan, rungs, 0.0
+        )
+        self.assertEqual(index, 0)
 
     def test_gif_target_size_progress(self) -> None:
         """试编码进度落在 0.05~0.95，最后一档结束后补到 1.0。"""
