@@ -39,7 +39,9 @@ RESOLUTION_OPTIONS = [
     ("1440p", "2K"),
     ("2160p", "4K"),
 ]
-FPS_OPTIONS = [(str(value), f"{value}") for value in (10, 12, 15, 20, 24, 30)]
+FPS_OPTIONS = [(str(value), f"{value}") for value in (10, 12, 15, 20, 24, 30)] + [
+    ("custom", "自定义"),
+]
 SIZE_OPTIONS = [("0", "原画"), ("20", "20 MB"), ("10", "10 MB"), ("5", "5 MB"), ("2", "2 MB"), ("custom", "自定义")]
 SIZE_PRESETS_MB = (0, 20, 10, 5, 2)
 OUT_OPTIONS = [("same", "源文件旁"), ("folder", "指定文件夹")]
@@ -115,15 +117,35 @@ class VideoPanel(QWidget):
         card.body.addWidget(self.quality_row)
         return card
 
+    def _caption_row(
+        self, text: str, control: QWidget, *, hint: str = "", align_top: bool = False
+    ) -> QWidget:
+        """「左侧短标签 + 右侧控件」同一行（省掉一整行标签的高度，360px 面板里很关键）。
+
+        ``align_top``：控件会折成多行时把标签顶到第一行，避免垂直居中显得漂浮。
+        """
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        label = QLabel(text)
+        label.setObjectName("Caption")
+        label.setFixedWidth(56)
+        if hint:
+            label.setToolTip(hint)
+        layout.addWidget(label)
+        layout.addWidget(control, 1)
+        if align_top:
+            layout.setAlignment(label, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            label.setContentsMargins(0, 6, 0, 0)
+        return row
+
     def _build_picture_card(self) -> Card:
         card = Card(self.theme, padding=14, spacing=8)
         card.body.addWidget(SectionHeader(self.theme, "画面"))
-        label = QLabel("分辨率")
-        label.setObjectName("Caption")
-        card.body.addWidget(label)
         self.resolution_group = ChipGroup(self.theme, RESOLUTION_OPTIONS, columns=5, compact=True)
         self.resolution_group.valueChanged.connect(lambda _v: self._emit())
-        card.body.addWidget(self.resolution_group)
+        card.body.addWidget(self._caption_row("分辨率", self.resolution_group))
 
         # ---- GIF 专属 ----
         self.gif_box = QWidget()
@@ -131,18 +153,20 @@ class VideoPanel(QWidget):
         gif_layout.setContentsMargins(0, 2, 0, 0)
         gif_layout.setSpacing(8)
 
-        size_label = QLabel("体积上限")
-        size_label.setObjectName("Caption")
-        gif_layout.addWidget(size_label)
         self.size_group = ChipGroup(self.theme, SIZE_OPTIONS, columns=6, compact=True)
         self.size_group.valueChanged.connect(self._on_size_changed)
-        gif_layout.addWidget(self.size_group)
+        gif_layout.addWidget(
+            self._caption_row(
+                "体积上限",
+                self.size_group,
+                hint="GIF 自动压缩到目标体积：优先保住分辨率（文字尽量清晰），再降帧率与颜色数，数值越大越清晰",
+            )
+        )
 
         size_row = QWidget()
         size_layout = QHBoxLayout(size_row)
         size_layout.setContentsMargins(0, 0, 0, 0)
         size_layout.setSpacing(8)
-        size_label.setToolTip("GIF 超过自动压缩到目标体积：优先保住分辨率（文字尽量清晰），再降帧率与颜色数，数值越大越清晰")
         self.max_mb_spin = QSpinBox()
         self.max_mb_spin.setRange(1, 2000)
         self.max_mb_spin.setSuffix(" MB")
@@ -153,12 +177,23 @@ class VideoPanel(QWidget):
         size_layout.addWidget(self.max_mb_spin)
         gif_layout.addWidget(size_row)
 
-        fps_label = QLabel("帧率")
-        fps_label.setObjectName("Caption")
-        gif_layout.addWidget(fps_label)
         self.fps_group = ChipGroup(self.theme, FPS_OPTIONS, columns=6, compact=True)
-        self.fps_group.valueChanged.connect(lambda _v: self._emit())
-        gif_layout.addWidget(self.fps_group)
+        self.fps_group.valueChanged.connect(self._on_fps_changed)
+        gif_layout.addWidget(self._caption_row("帧率", self.fps_group, align_top=True))
+
+        fps_row = QWidget()
+        fps_layout = QHBoxLayout(fps_row)
+        fps_layout.setContentsMargins(0, 0, 0, 0)
+        fps_layout.setSpacing(8)
+        self.fps_spin = QSpinBox()
+        self.fps_spin.setRange(1, 60)
+        self.fps_spin.setSuffix(" fps")
+        self.fps_spin.setFixedHeight(30)
+        self.fps_spin.setFixedWidth(92)
+        self.fps_spin.valueChanged.connect(self._on_fps_value_changed)
+        fps_layout.addStretch(1)
+        fps_layout.addWidget(self.fps_spin)
+        gif_layout.addWidget(fps_row)
 
         range_row = QWidget()
         range_layout = QHBoxLayout(range_row)
@@ -243,10 +278,15 @@ class VideoPanel(QWidget):
         if resolution not in dict(RESOLUTION_OPTIONS):
             resolution = "source"
         self.resolution_group.set_value(resolution)
-        fps = str(int(s["video_fps"]))
-        if fps not in dict(FPS_OPTIONS):
-            fps = "15"
-        self.fps_group.set_value(fps)
+        fps_value = max(1, min(60, int(s["video_fps"])))
+        fps = str(fps_value)
+        if fps in dict(FPS_OPTIONS) and fps != "custom":
+            self.fps_group.set_value(fps)
+        else:
+            self.fps_group.set_value("custom")
+            self.fps_spin.blockSignals(True)
+            self.fps_spin.setValue(fps_value)
+            self.fps_spin.blockSignals(False)
         max_bytes = max(0, int(s["video_max_bytes"]))
         self.max_mb_spin.setValue(max(1, round(max_bytes / (1024 * 1024))) if max_bytes else 8)
         preset = "0" if not max_bytes else str(round(max_bytes / (1024 * 1024)))
@@ -273,7 +313,7 @@ class VideoPanel(QWidget):
         s["video_target"] = self.target_group.value() or "mp4"
         s["video_quality"] = int(self.quality_row.value())
         s["video_resolution"] = self.resolution_group.value() or "source"
-        s["video_fps"] = int(self.fps_group.value() or 15)
+        s["video_fps"] = self._current_fps()
         s["video_start"] = int(self.start_spin.value())
         s["video_duration"] = int(self.duration_spin.value())
         s["video_loop"] = self.loop_switch.isChecked()
@@ -292,6 +332,34 @@ class VideoPanel(QWidget):
             return 0
         mb = self.max_mb_spin.value() if value == "custom" else int(value)
         return int(mb) * 1024 * 1024
+
+    def _current_fps(self) -> int:
+        """当前帧率：预设档直接取值，自定义档取输入框。"""
+        value = self.fps_group.value() or "15"
+        if value == "custom":
+            return max(1, min(60, int(self.fps_spin.value())))
+        try:
+            return max(1, min(60, int(value)))
+        except ValueError:
+            return 15
+
+    def _on_fps_changed(self, value: str) -> None:
+        if value != "custom":
+            self.fps_spin.blockSignals(True)
+            self.fps_spin.setValue(int(value))
+            self.fps_spin.blockSignals(False)
+        self._sync_visibility()
+        self._emit()
+
+    def _on_fps_value_changed(self, value: int) -> None:
+        # 手动改成与预设相同的值时，自动切回预设，避免下拉与数值打架。
+        current = self.fps_group.value() or "custom"
+        if current != "custom" and str(value) != current:
+            self.fps_group.blockSignals(True)
+            self.fps_group.set_value(str(value) if str(value) in dict(FPS_OPTIONS) else "custom")
+            self.fps_group.blockSignals(False)
+        self._sync_visibility()
+        self._emit()
 
     def _on_size_changed(self, value: str) -> None:
         if value not in ("0", "custom"):
@@ -340,6 +408,7 @@ class VideoPanel(QWidget):
         self.quality_row.setVisible(not is_gif)
         self.gif_box.setVisible(is_gif)
         self.max_mb_spin.setVisible((self.size_group.value() or "0") == "custom")
+        self.fps_spin.setVisible((self.fps_group.value() or "15") == "custom")
         self.audio_row.setVisible(not is_gif)
         self.note_label.setText(NOTE_OVERRIDES.get(target, f"{spec.note} · 输出 {spec.ext}"))
         self._refresh_out_label()
@@ -349,6 +418,7 @@ class VideoPanel(QWidget):
         for group in (self.target_group, self.resolution_group, self.fps_group, self.size_group):
             group.set_enabled(enabled)
         self.max_mb_spin.setEnabled(enabled)
+        self.fps_spin.setEnabled(enabled)
         self.quality_row.slider.setEnabled(enabled)
         self.audio_row.setEnabled(enabled)
         self.loop_switch.setEnabled(enabled)
@@ -367,7 +437,7 @@ class VideoPanel(QWidget):
             target=spec.key,
             quality=int(self.quality_row.value() if spec.kind != "gif" else 100),
             resolution=self.resolution_group.value() or "source",
-            fps=int(self.fps_group.value() or 15),
+            fps=self._current_fps(),
             start=int(self.start_spin.value()),
             duration=int(self.duration_spin.value()),
             loop=self.loop_switch.isChecked(),

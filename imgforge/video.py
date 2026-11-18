@@ -565,23 +565,26 @@ def _not_lighter(candidate: _GifRung, previous: _GifRung) -> bool:
     return all(cur >= prev for cur, prev in pairs)
 
 
-_GIF_FIT_WIDTHS: tuple[float, ...] = (
-    1.0, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65,
-    0.60, 0.55, 0.50, 0.45, 0.40, 0.35, 0.30, 0.25,
+# 2% 一档的细阶梯：20 MB 这类「刚好差一点」的目标下，5% 的粗阶梯会白白浪费
+# 一大截预算（实测 1536 → 1696 之间还有 10% 的清晰度空间可捡）。
+_GIF_FIT_WIDTHS: tuple[float, ...] = tuple(
+    round(1.0 - 0.02 * step, 2) for step in range(36)  # 1.00, 0.98, …, 0.30
 )
-_GIF_FIT_FPS: tuple[int, ...] = (15, 12, 10, 8, 6, 5, 4)
+_GIF_FIT_FPS: tuple[int, ...] = (12, 10, 8, 6)   # 低于 6 fps 会有明显幻灯片感，宁可换分辨率
 _GIF_FIT_COLORS: tuple[int, ...] = (64, 32)
-_MAX_GIF_FIT_STEPS = 6       # 最多真的编码几档（预测已把起点压到目标附近）
+_MAX_GIF_FIT_STEPS = 6           # 最多真的编码几档（预测已把起点压到目标附近）
+_GIF_PROMOTE_STEPS = 1           # 命中后最多再回试几档更清晰的（每档约 8–10 秒）
+_GIF_PROMOTE_THRESHOLD = 0.96    # 只用到上限的 96% 以下才回试，留 4% 余量防抖动
 
 
 def _gif_score(width: int, fps: int, colors: int) -> float:
     """档位「清晰度」评分：分辨率优先，帧率次之，色数只做轻微加权。
 
     讲解类视频里，文字能不能看清几乎完全由分辨率决定，帧率只影响「顺不顺」；
-    所以宽度的权重最高（线性），帧率给 0.45 次方，色数只给 0.12 次方
-    （64 色比 32 色真正多用的字节并不多，但能明显减少暗部色带）。
+    所以宽度权重最高（线性），帧率只给 0.20 次方（6 fps 是兜底下限），
+    色数只给 0.10 次方（32 色在深色背景上已足够，把预算留给分辨率收益更大）。
     """
-    return width * (fps ** 0.30) * ((colors / 32.0) ** 0.25)
+    return width * (fps ** 0.20) * ((colors / 32.0) ** 0.10)
 
 
 def _gif_fit_ladder(plan: _Plan) -> list[_GifRung]:
@@ -606,7 +609,16 @@ def _gif_fit_ladder(plan: _Plan) -> list[_GifRung]:
                 continue
             for colors in _GIF_FIT_COLORS:
                 rungs.append(
-                    _GifRung(width, fps, colors, "bayer" if colors >= 256 else "none")
+                    _GifRung(
+                        width,
+                        fps,
+                        colors,
+                        "bayer" if colors >= 256 else "none",
+                        # 讲解/录屏类素材里大量帧几乎静止，dedupe 能省 30–60% 体积，
+                        # 省下来的预算全部换成清晰度；同时用全局调色板进一步压缩。
+                        dedupe=True,
+                        denoise=True,
+                    )
                 )
     rungs.sort(key=lambda r: _gif_score(r.width or source_width, r.fps, r.colors), reverse=True)
     return rungs
@@ -617,7 +629,7 @@ _PREDICT_FPS = 10             # 预测用的试编码帧率
 _PREDICT_COLORS = 64          # 预测用的调色板色数
 _PREDICT_SAMPLE = 2.5         # 预测用的采样时长（秒）
 _PREDICT_AREA_EXP = 3.7       # 体积随宽度增长的指数（实测噪声/细节丰富的素材近似三次以上）
-_PREDICT_SAFETY = 0.98        # 预测用样片略偏保守，乘 0.82 后留 2% 余量
+_PREDICT_SAFETY = 1.12        # 样片取自 35% 处、比全片平均更复杂，允许预测略超（真实验证兜底）
 
 
 def _predict_gif_rung(
@@ -1305,20 +1317,22 @@ def _encode_gif_fit(
                 _discard(temp)  # 降档后反而更大（调色板/抖动导致），丢弃这一档
             if size <= plan.max_bytes:  # 命中目标体积
                 outcome.within_limit = True
-                # 命中得比较轻松（不到上限的 85%）说明还有余量，回头把更高评分
-                # （更清晰）的档位逐级试一遍，能装下就换成更好的；最多回溯 3 档，
-                # 保证总耗时可控。
-                if size <= plan.max_bytes * 0.85:
-                    for back in range(1, 2):
-                        if index - back < 0:
-                            break
-                        status2, size2 = encode(rungs[index - back], index - back)
-                        if status2 == "ok" and size2 <= plan.max_bytes:
-                            _discard(candidate)
-                            candidate, outcome.rung, outcome.bytes = (
-                                temps[-1], rungs[index - back], size2
-                            )
-                            break
+                # 命中得比较轻松（未用满上限的 97%）说明还有余量，回头把更高评分
+                # （更清晰）的档位逐级试一遍，能装下就换成更好的；最多回试 3 档，
+                # 保证总耗时可控（每档约 8–10 秒）。
+                back = 0
+                while (
+                    index - back - 1 >= 0
+                    and back < _GIF_PROMOTE_STEPS
+                    and size <= plan.max_bytes * _GIF_PROMOTE_THRESHOLD
+                ):
+                    back += 1
+                    status2, size2 = encode(rungs[index - back], index - back)
+                    if status2 != "ok" or size2 > plan.max_bytes:
+                        continue  # 这一档装不下，继续往更清晰的档位试
+                    _discard(candidate)
+                    candidate = temps[-1]
+                    outcome.rung, outcome.bytes, size = rungs[index - back], size2, size2
                 break
         if candidate is not None:
             outcome.path = candidate  # 命中档，或全部不达标时最小的一档

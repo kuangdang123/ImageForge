@@ -397,11 +397,14 @@ class VideoTest(unittest.TestCase):
         rungs = video._gif_fit_ladder(plan)
         self.assertGreater(len(rungs), 50)
         self.assertEqual(rungs[0].width, 1920)
-        self.assertEqual(rungs[0].fps, 15)
+        self.assertEqual(rungs[0].fps, video._GIF_FIT_FPS[0])
+        self.assertEqual(video._GIF_FIT_FPS, (12, 10, 8, 6))
         scores = [video._gif_score(r.width or 1920, r.fps, r.colors) for r in rungs]
         self.assertEqual(scores, sorted(scores, reverse=True))
         # 宽 / 帧率 / 色数都是单调不增的组合，不会出现「更小反而排更前」
         self.assertTrue(all(32 <= r.colors <= 64 for r in rungs))
+        # 自动压缩的档位一律开启去重复帧 + 去噪（实测能省 30–60% 体积）
+        self.assertTrue(all(r.dedupe and r.denoise for r in rungs))
 
     def test_gif_filter_denoise_and_area(self) -> None:
         """去噪与 area 缩放默认开启（体积能省 25% 以上，文字边缘基本不受影响）。"""
