@@ -1,6 +1,6 @@
-# ImageForge 2.6.1
+# ImageForge 2.7.0
 
-把 PNG / JPG / WebP / BMP / TIFF / AVIF 互转、一键生成**多尺寸 Windows 图标**，把图片**放大 2–32 倍**（Real-CUGAN Vulkan / APISR DirectML），还能把视频在 **MP4 / MKV / MOV / WebM / AVI / GIF** 之间互转的桌面小工具。
+把 PNG / JPG / WebP / BMP / TIFF / AVIF 互转、一键生成**多尺寸 Windows 图标**，把图片**放大 2–32 倍**（Real-CUGAN Vulkan / APISR DirectML），还能把视频在 **MP4 / MKV / MOV / WebM / AVI / GIF** 之间互转的桌面小工具；另外提供**零安装的 Web 版**（`web/index.html`，浏览器本地处理、不联网）。
 
 界面用 PySide6（Qt 6）编写：原生控件、明暗两套主题、1.5× 高 DPI 下依然锐利；顶部导航切换「图片转换」「视频转换」「分辨率放大」，三页共用同一套主题、拖拽与队列交互。所有偏好（模式、格式、尺寸、质量、模型、主题、窗口大小）下次启动自动恢复。
 所有处理都在本机完成，不依赖浏览器、不上传文件、不需要联网（模型首次下载除外）。
@@ -44,6 +44,7 @@
 - **可控输出**：有损质量滑杆、WebP 无损、保留 EXIF / ICC、文件名后缀、输出到源文件旁边或指定文件夹；放大页还能选择保持原格式或另存 PNG / JPG / WebP。
 - **不覆盖原图**：输出与源文件同名时自动改名，重名自动加 ` (2)`；放大产物默认带 `_upscaled`，绝不碰源文件。
 - **预览**：大图查看 + 透明棋盘格 + 元信息；输出 ICO 时还能看到每一档尺寸真实渲染出来的样子。
+- **Web 版**：同一套功能搬到浏览器里（`web/index.html`），零安装、零依赖、文件不离开本机；ICO / BMP / TIFF / ZIP 编码器都是手写的，WebP / AVIF 编码取决于浏览器。
 - **明暗主题**、窗口大小、上次使用的目录都会记住；重复启动只会开一个窗口。
 
 ## 快速开始
@@ -79,6 +80,11 @@ pip install -r requirements.txt
 启动器会优先找同目录下的 `ImageForge.exe`，没有才退回 `pythonw` / `pyw` / `python`。
 
 > 1.x 的 tkinter 版本仍然保留在标签 `v1.0.0` 与 `app.pyw` / `启动 ImageForge 1.x.bat` 里，可以继续用；2.0 是独立的 `app2.pyw` 与 `imgforge/qt/`。
+
+### 方式三：Web 版（不用装任何东西）
+
+双击仓库里的 `web/index.html` 就能用：单个静态页面，不需要 Python、不需要安装、不联网。
+支持图片格式互转与多尺寸 ICO，细节见 [Web 版](#web-版)。
 
 ## 使用
 
@@ -289,8 +295,12 @@ ImageForge/
 │  ├─ __main__.py            模块入口（无参数开 GUI）
 │  ├─ gui.py / widgets.py / theme.py / picker.py   1.x tkinter 界面
 │  └─ assets/                应用图标与 logo
+├─ web/                      零安装 Web 版（纯静态，双击 index.html）
+│  ├─ index.html             页面骨架 + 内联 SVG 图标
+│  ├─ styles.css             明暗两套语义 token 与组件样式
+│  └─ js/                    util / ico / bmp / tiff / zip / convert / app
 ├─ samples/                  示例图片与示例视频（clip.mp4）
-├─ tests/                    190 个单元测试（格式转换 + 挑图 + 单实例 + 设置 + 超分 + ONNX + 模型安装 + 视频）
+├─ tests/                    201 个单元测试（格式转换 + 挑图 + 单实例 + 设置 + 超分 + ONNX + 模型安装 + 视频）
 ├─ tools/
 │  ├─ make_icon.py           从 assets/logo.png 重新生成 assets/app.ico
 │  ├─ check_contrast.py      色板对比度校验
@@ -304,6 +314,9 @@ ImageForge/
 │  ├─ qt_shot.py             真实平台界面截图
 │  ├─ shot_window.py         按标题截取任意窗口（含打包后的 exe）
 │  ├─ gui_smoke.py / picker_smoke.py   1.x 界面冒烟
+│  ├─ web_test.js            Web 版编码器自检（Node，生成 tmp/web/*）
+│  ├─ verify_web.py          用 Pillow 解码校验 Web 版产物（21 项）
+│  ├─ web_shot.js            用 Chrome DevTools Protocol 给 Web 版截图
 │  └─ …
 └─ docs/screenshots/
 ```
@@ -311,7 +324,7 @@ ImageForge/
 ## 开发
 
 ```powershell
-python -m unittest discover -s tests          # 190 个测试
+python -m unittest discover -s tests          # 201 个测试
 python tools/make_icon.py                     # 从 assets/logo.png 生成多尺寸 app.ico
 python tools/check_contrast.py                # 明暗两套色板 WCAG 校验
 python tools/qt_smoke.py                      # 离屏跑完整流程
@@ -323,6 +336,9 @@ python app2.pyw --install-models              # 无界面下载放大模型（nc
 python tools/pack_models.py                   # 打包 ncnn 与 apisr 模型 zip（上传到 models-v1 / models-v2）
 python tools/qt_shot.py light tmp\a.png       # 真实窗口截图（dark / --picker / --preview / --convert / --upscale）
 python tools/build_exe.py                     # 打包 dist\ImageForge.exe（约 87 MB，模型不含在内）
+node tools/web_test.js                        # Web 版编码器自检（Node，无依赖）
+python tools/verify_web.py                    # 用 Pillow 校验 Web 版生成的 ICO/BMP/TIFF/ZIP
+node tools/web_shot.js "file:///D:/Desktop/ImageForge/web/index.html?demo=1&theme=light" tmp\web.png
 ```
 
 开发脚本把配置写到 `tmp/settings/`（通过 `IMAGEFORGE_HOME` 环境变量重定向），不会动 `%APPDATA%` 里的真实配置。
@@ -370,7 +386,45 @@ GIF 每帧都是独立的 256 色全帧位图（LZW 压缩），**没有帧间�
 
 > 想要又清晰又流畅，GIF 不是好容器：同样内容转 **WebP 动图 / MP4** 体积能小 5–10 倍；或者把片段截短（视频页的「时长」），体积会按秒数线性下降。
 
+## Web 版
+
+`web/` 是零依赖、零构建的静态版本：不需要 Python、不需要安装、不联网，转换全部在浏览器里用 File API + Canvas 完成，文件不会离开本机。
+
+- 支持 **PNG / JPG / WebP / BMP / TIFF / AVIF** 互转，以及**多尺寸 ICO 生成**（16 / 24 / 32 / 48 / 64 / 128 / 256 七档，PNG 或 BMP 载荷）；
+- 编码器全部手写：ICO 容器（PNG + DIB + 1bpp AND 掩码）、BMP（24/32 位、自底向上）、未压缩小端 TIFF、store 模式 ZIP（UTF-8 文件名 + CRC32）；
+- 交互与桌面版一致：拖拽 / 文件夹递归 / 粘贴、队列、格式胶囊、尺寸复选、非正方形处理、像素数据、质量滑条、背景色、文件名后缀、命名预览、预览弹窗（含 ICO 每一档真实渲染）、明暗主题；
+- 批量：全部转换完后「全部下载 (zip)」一次打包。
+
+```powershell
+# 直接双击
+web\index.html
+
+# 或者起一个本地静态服务器（可选）
+python -m http.server 8000 --directory web
+```
+
+![Web 浅色](docs/screenshots/web-light.png)
+
+<details>
+<summary>Web 深色、转换完成、预览弹窗（点击展开）</summary>
+
+![Web 深色](docs/screenshots/web-dark.png)
+
+![Web 转换完成](docs/screenshots/web-done.png)
+
+![Web 预览](docs/screenshots/web-preview.png)
+
+</details>
+
+> WebP / AVIF 的**编码**支持取决于浏览器：Chrome / Edge 两种都支持，Firefox 支持 WebP 但不支持 AVIF 编码。不支持的格式会在设置里标灰并提示；桌面版没有这个限制。
+
 ## 更新日志
+
+### 2.7.0
+
+- 新增**零安装 Web 版**（`web/`）：图片格式互转 + 多尺寸 ICO，自研 ICO / BMP / TIFF / ZIP 编码器，浏览器本地处理，明暗主题、拖拽 / 粘贴 / 文件夹递归、预览与批量 ZIP 下载。
+- 新增 `tools/web_test.js`（Node 编码自检）、`tools/verify_web.py`（Pillow 解码校验 21 项）、`tools/web_shot.js`（CDP 截图）。
+- 桌面版无功能变化。
 
 ### 2.6.1
 
